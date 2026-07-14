@@ -259,10 +259,12 @@ func (f formModel) View() string {
 	if w < 40 {
 		w = 80
 	}
-	box := panelStyle.Width(w - 2)
-	if f.height > 6 {
-		box = box.Height(f.height - 2)
+	h := f.height
+	if h < 1 {
+		h = 10
 	}
+	// Fill the entire main pane (caller already reserved chrome rows).
+	box := panelStyle.Width(w).Height(h).MaxHeight(h)
 	return box.Render(inner)
 }
 
@@ -326,5 +328,11 @@ func fillHeight(content string, width, height int) string {
 	if width < 1 {
 		width = 1
 	}
-	return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(content)
+	// Width + Height force the content box to occupy the full terminal region.
+	return lipgloss.NewStyle().
+		Width(width).
+		Height(height).
+		MaxHeight(height).
+		MaxWidth(width).
+		Render(content)
 }

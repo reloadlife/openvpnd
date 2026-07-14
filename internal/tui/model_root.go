@@ -626,230 +626,365 @@ func (m rootModel) submitBinaryForm() (tea.Model, tea.Cmd) {
 // ─── View ───────────────────────────────────────────────────────────
 
 func (m rootModel) View() string {
-	if m.width == 0 {
-		m.width = 100
-		m.height = 30
+	w, h := m.width, m.height
+	if w <= 0 {
+		w = 100
 	}
-	var body string
+	if h <= 0 {
+		h = 30
+	}
+
+	// Top bar: full width status chrome
+	status := fmt.Sprintf(" openvpnctl  ·  %s  ·  %s ", m.cfg.Endpoint, m.status)
+	if m.flash != "" {
+		status += " ✓ " + m.flash + " "
+	}
+	if m.busy {
+		status += " … "
+	}
+	if m.err != "" && m.mode == modeList {
+		status += "  err: " + trunc(m.err, max(10, w/4)) + " "
+	}
+	header := statusStyle.Width(w).Render(status)
+
+	// Bottom bar: full width contextual help
+	footer := helpStyle.Width(w).Background(cBarBg).Foreground(cBarFg).Padding(0, 1).Render(" " + m.chromeHelp() + " ")
+
+	headerH := lipgloss.Height(header)
+	footerH := lipgloss.Height(footer)
+	mainH := h - headerH - footerH
+	if mainH < 1 {
+		mainH = 1
+	}
+
+	var mid string
+	switch m.mode {
+	case modeConfirm:
+		mid = panelStyle.Width(w).Height(mainH).MaxHeight(mainH).Render(
+			warnStyle.Render("Confirm") + "\n\n" + m.confirmText + "\n\n" +
+				helpStyle.Render("[y] yes   [n / esc] cancel"),
+		)
+	case modeInstForm, modeClientForm, modeBinaryForm:
+		m.form.SetSize(w, mainH)
+		mid = m.form.View()
+	case modeInstDetail:
+		mid = fillHeight(m.viewInstDetail(w, mainH), w, mainH)
+	case modeClientDetail:
+		mid = fillHeight(m.viewClientDetail(w, mainH), w, mainH)
+	case modeConfView:
+		mid = fillHeight(m.viewConf(w, mainH), w, mainH)
+	case modeProfileLink:
+		mid = fillHeight(m.viewProfileLink(w, mainH), w, mainH)
+	default:
+		var b strings.Builder
+		b.WriteString(m.renderTabs())
+		b.WriteString("\n")
+		if m.err != "" {
+			b.WriteString(errStyle.Render("error: " + m.err))
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+		switch m.tab {
+		case tabInstances:
+			b.WriteString(m.viewInstanceList(w))
+		case tabClients:
+			b.WriteString(m.viewClientList(w))
+		case tabBinaries:
+			b.WriteString(m.viewBinaryList(w))
+		case tabStats:
+			b.WriteString(m.viewStats(w))
+		case tabEvents:
+			b.WriteString(m.viewEvents(w, mainH))
+		}
+		mid = fillHeight(b.String(), w, mainH)
+	}
+
+	mid = fillHeight(mid, w, mainH)
+	return lipgloss.JoinVertical(lipgloss.Left, header, mid, footer)
+}
+
+func (m rootModel) chromeHelp() string {
 	switch m.mode {
 	case modeInstForm, modeClientForm, modeBinaryForm:
-		body = m.form.View()
+		return "tab/↑↓ fields  ·  ←/→ or space change  ·  enter save  ·  esc cancel"
 	case modeConfirm:
-		body = panelStyle.Width(m.width-2).Render(
-			titleStyle.Render("Confirm") + "\n\n" + warnStyle.Render(m.confirmText) + "\n\n" +
-				helpStyle.Render("y confirm · n/esc cancel"),
-		)
+		return "y confirm  ·  n/esc cancel"
 	case modeInstDetail:
-		body = m.viewInstDetail()
+		return "u/d up/down  ·  r restart  ·  e export  ·  n new client  ·  D delete  ·  esc back  ·  q quit"
 	case modeClientDetail:
-		body = m.viewClientDetail()
-	case modeConfView:
-		body = m.viewConf()
-	case modeProfileLink:
-		body = m.viewProfileLink()
+		return "s/S suspend/resume  ·  t reset traffic  ·  c .ovpn  ·  p/L profile link  ·  D delete  ·  esc back"
+	case modeConfView, modeProfileLink:
+		return "↑↓ scroll  ·  esc/enter back"
 	default:
-		body = m.viewList()
+		return m.listHelp()
 	}
-	header := m.viewHeader()
-	status := m.viewStatus()
-	// full layout
-	innerH := m.height - 2
-	if innerH < 5 {
-		innerH = 5
-	}
-	main := fillHeight(body, m.width, innerH)
-	return lipgloss.JoinVertical(lipgloss.Left, header, main, status)
 }
 
-func (m rootModel) viewHeader() string {
-	tabs := []string{"1 Instances", "2 Clients", "3 Binaries", "4 Stats", "5 Events"}
-	var parts []string
-	for i, t := range tabs {
-		if i == m.tab && m.mode == modeList {
-			parts = append(parts, tabActive.Render(t))
-		} else {
-			parts = append(parts, tabInactive.Render(t))
-		}
-	}
-	left := lipgloss.JoinHorizontal(lipgloss.Top, parts...)
-	right := dimStyle.Render("openvpnd  " + m.cfg.Endpoint)
-	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 1 {
-		gap = 1
-	}
-	return left + strings.Repeat(" ", gap) + right
-}
-
-func (m rootModel) viewStatus() string {
-	var bits []string
-	bits = append(bits, " "+m.status+" ")
-	if m.busy {
-		bits = append(bits, " busy ")
-	}
-	if m.flash != "" {
-		bits = append(bits, " "+m.flash+" ")
-	}
-	if m.err != "" {
-		return errStyle.Render(" "+m.err+" ") + statusStyle.Width(m.width).Render(strings.Join(bits, "·"))
-	}
-	line := statusStyle.Width(m.width).Render(strings.Join(bits, " · "))
-	return line
-}
-
-func (m rootModel) viewList() string {
+func (m rootModel) listHelp() string {
+	base := "1-5 tabs  ·  j/k  ·  enter detail  ·  n new  ·  r refresh  ·  R reconcile  ·  q quit"
 	switch m.tab {
 	case tabInstances:
-		return m.viewInstanceList()
+		return base + "  ·  u/d up/down  ·  D delete"
 	case tabClients:
-		return m.viewClientList()
+		return base + "  ·  s/S suspend/resume  ·  D delete"
 	case tabBinaries:
-		return m.viewBinaryList()
-	case tabStats:
-		return m.viewStats()
-	case tabEvents:
-		return m.viewEvents()
+		return base + "  ·  D delete"
+	default:
+		return base
 	}
-	return ""
 }
 
-func (m rootModel) viewInstanceList() string {
+func (m rootModel) renderTabs() string {
+	names := []string{"Instances", "Clients", "Binaries", "Stats", "Events"}
+	parts := make([]string, len(names))
+	for i, n := range names {
+		label := fmt.Sprintf("%d %s", i+1, n)
+		if i == m.tab {
+			parts[i] = tabActive.Render(label)
+		} else {
+			parts[i] = tabInactive.Render(label)
+		}
+	}
+	tabs := lipgloss.JoinHorizontal(lipgloss.Top, parts...)
+	// stretch tabs row to full width
+	pad := m.width - lipgloss.Width(tabs)
+	if pad < 0 {
+		pad = 0
+	}
+	return tabs + strings.Repeat(" ", pad)
+}
+
+// colWidths distributes terminal width across column min widths; remainder goes to last flexible col.
+func colWidths(total int, mins []int, flex int) []int {
+	if total < 1 {
+		total = 80
+	}
+	out := make([]int, len(mins))
+	copy(out, mins)
+	sum := 0
+	for _, n := range out {
+		sum += n
+	}
+	// spaces between columns
+	gaps := len(out) - 1
+	if gaps < 0 {
+		gaps = 0
+	}
+	avail := total - gaps
+	if avail < sum {
+		// shrink from the end
+		deficit := sum - avail
+		for i := len(out) - 1; i >= 0 && deficit > 0; i-- {
+			cut := min(deficit, max(0, out[i]-4))
+			out[i] -= cut
+			deficit -= cut
+		}
+		return out
+	}
+	if flex < 0 || flex >= len(out) {
+		flex = len(out) - 1
+	}
+	out[flex] += avail - sum
+	return out
+}
+
+func padCell(s string, width int) string {
+	if width <= 0 {
+		return s
+	}
+	// visible width for plain text; ANSI-free truncation first
+	s = trunc(s, width)
+	n := lipgloss.Width(s)
+	if n < width {
+		return s + strings.Repeat(" ", width-n)
+	}
+	return s
+}
+
+func (m rootModel) viewInstanceList(w int) string {
+	// NAME ROLE STATE BINARY PORT CLIENTS RX TX RX/s TX/s
+	cw := colWidths(w-2, []int{16, 8, 6, 12, 6, 8, 10, 10, 10, 10}, 0)
 	var b strings.Builder
-	b.WriteString(headerStyle.Render("NAME            ROLE     STATE   BINARY     PORT   CLIENTS   RX         TX"))
+	hdr := fmt.Sprintf("%s %s %s %s %s %s %s %s %s %s",
+		padCell("NAME", cw[0]), padCell("ROLE", cw[1]), padCell("STATE", cw[2]),
+		padCell("BINARY", cw[3]), padCell("PORT", cw[4]), padCell("CLIENTS", cw[5]),
+		padCell("RX", cw[6]), padCell("TX", cw[7]), padCell("RX/s", cw[8]), padCell("TX/s", cw[9]))
+	b.WriteString(headerStyle.Render(hdr))
 	b.WriteString("\n")
 	if len(m.instances) == 0 {
-		b.WriteString(dimStyle.Render("\n  No instances. Press n to create.\n"))
+		b.WriteString(dimStyle.Render("(no instances — press n to create)"))
+		b.WriteString("\n")
+		return b.String()
 	}
 	for i, inst := range m.instances {
-		state := badgeDown.Render("DOWN")
+		state := "DOWN"
 		if inst.Up {
-			state = badgeUp.Render(" UP ")
+			state = "UP"
 		} else if inst.Enabled {
-			state = warnStyle.Render("WAIT")
+			state = "WAIT"
 		}
-		role := badgeSrv.Render("srv")
-		if inst.Role == "client" {
-			role = badgeCli.Render("cli")
-		}
-		line := fmt.Sprintf("%-15s %-8s %s  %-10s %-6d %-8d %-10s %-10s",
-			trunc(inst.Name, 15), role, state, trunc(inst.BinaryName, 10), inst.Port,
-			inst.ConnectedClients, formatBytes(inst.RxBytes), formatBytes(inst.TxBytes))
+		line := fmt.Sprintf("%s %s %s %s %s %s %s %s %s %s",
+			padCell(inst.Name, cw[0]),
+			padCell(inst.Role, cw[1]),
+			padCell(state, cw[2]),
+			padCell(inst.BinaryName, cw[3]),
+			padCell(fmt.Sprintf("%d", inst.Port), cw[4]),
+			padCell(fmt.Sprintf("%d", inst.ConnectedClients), cw[5]),
+			padCell(formatBytes(inst.RxBytes), cw[6]),
+			padCell(formatBytes(inst.TxBytes), cw[7]),
+			padCell(formatBps(inst.RxBps), cw[8]),
+			padCell(formatBps(inst.TxBps), cw[9]),
+		)
 		if i == m.cursor {
-			b.WriteString(selStyle.Render("▸ " + line))
+			b.WriteString(selStyle.Width(w).Render(line))
 		} else {
-			b.WriteString("  " + line)
+			// colour state without breaking width much
+			if inst.Up {
+				// already plain text for alignment
+			}
+			b.WriteString(line)
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("n new · enter detail · u/d up/down · D delete · r refresh · R reconcile · 1-5 tabs · q quit"))
 	return b.String()
 }
 
-func (m rootModel) viewClientList() string {
+func (m rootModel) viewClientList(w int) string {
+	cw := colWidths(w-2, []int{14, 16, 14, 14, 6, 10, 10, 10, 10}, 1)
 	var b strings.Builder
-	b.WriteString(headerStyle.Render("INSTANCE        CN              NAME         IP            STATE      RX         TX"))
+	hdr := fmt.Sprintf("%s %s %s %s %s %s %s %s %s",
+		padCell("INSTANCE", cw[0]), padCell("CN", cw[1]), padCell("NAME", cw[2]),
+		padCell("IP", cw[3]), padCell("STATE", cw[4]),
+		padCell("RX", cw[5]), padCell("TX", cw[6]), padCell("RX/s", cw[7]), padCell("TX/s", cw[8]))
+	b.WriteString(headerStyle.Render(hdr))
 	b.WriteString("\n")
 	if len(m.clients) == 0 {
-		b.WriteString(dimStyle.Render("\n  No clients. Open a server and press n, or tab Clients + n.\n"))
+		b.WriteString(dimStyle.Render("(no clients — open a server and press n)"))
+		b.WriteString("\n")
+		return b.String()
 	}
 	for i, cl := range m.clients {
-		state := dimStyle.Render("idle")
+		state := "idle"
 		if cl.Suspended {
-			state = badgeSusp.Render("SUSP")
+			state = "SUSP"
 		} else if cl.Connected {
-			state = badgeConn.Render("CONN")
+			state = "CONN"
 		}
-		line := fmt.Sprintf("%-15s %-15s %-12s %-13s %s  %-10s %-10s",
-			trunc(cl.InstanceName, 15), trunc(cl.CommonName, 15), trunc(cl.Name, 12),
-			trunc(cl.StaticIP, 13), state, formatBytes(cl.RxBytes), formatBytes(cl.TxBytes))
+		line := fmt.Sprintf("%s %s %s %s %s %s %s %s %s",
+			padCell(cl.InstanceName, cw[0]),
+			padCell(cl.CommonName, cw[1]),
+			padCell(cl.Name, cw[2]),
+			padCell(cl.StaticIP, cw[3]),
+			padCell(state, cw[4]),
+			padCell(formatBytes(cl.RxBytes), cw[5]),
+			padCell(formatBytes(cl.TxBytes), cw[6]),
+			padCell(formatBps(cl.RxBps), cw[7]),
+			padCell(formatBps(cl.TxBps), cw[8]),
+		)
 		if i == m.cursor {
-			b.WriteString(selStyle.Render("▸ " + line))
+			b.WriteString(selStyle.Width(w).Render(line))
 		} else {
-			b.WriteString("  " + line)
+			b.WriteString(line)
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("n new · enter detail · s/S suspend/resume · D delete · r refresh · q quit"))
 	return b.String()
 }
 
-func (m rootModel) viewBinaryList() string {
+func (m rootModel) viewBinaryList(w int) string {
+	cw := colWidths(w-2, []int{16, 40, 24}, 1)
 	var b strings.Builder
-	b.WriteString(headerStyle.Render("NAME            PATH                                      VERSION"))
+	hdr := fmt.Sprintf("%s %s %s",
+		padCell("NAME", cw[0]), padCell("PATH", cw[1]), padCell("VERSION", cw[2]))
+	b.WriteString(headerStyle.Render(hdr))
 	b.WriteString("\n")
 	if len(m.binaries) == 0 {
-		b.WriteString(dimStyle.Render("\n  No binaries registered.\n"))
+		b.WriteString(dimStyle.Render("(no binaries — press n to register)"))
+		b.WriteString("\n")
+		return b.String()
 	}
 	for i, bin := range m.binaries {
-		line := fmt.Sprintf("%-15s %-41s %s", trunc(bin.Name, 15), trunc(bin.Path, 41), trunc(bin.Version, 40))
+		line := fmt.Sprintf("%s %s %s",
+			padCell(bin.Name, cw[0]),
+			padCell(bin.Path, cw[1]),
+			padCell(bin.Version, cw[2]),
+		)
 		if i == m.cursor {
-			b.WriteString(selStyle.Render("▸ " + line))
+			b.WriteString(selStyle.Width(w).Render(line))
 		} else {
-			b.WriteString("  " + line)
+			b.WriteString(line)
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("n register · D delete · r refresh · q quit"))
 	return b.String()
 }
 
-func (m rootModel) viewStats() string {
+func (m rootModel) viewStats(w int) string {
 	s := m.stats
-	var b strings.Builder
-	b.WriteString(titleStyle.Render("Global stats"))
-	b.WriteString("\n\n")
+	var body strings.Builder
+	body.WriteString(titleStyle.Render("Global stats"))
+	body.WriteString("\n\n")
 	kv := func(k, v string) {
-		b.WriteString(labelStyle.Render(k))
-		b.WriteString(valueStyle.Render(v))
-		b.WriteString("\n")
+		body.WriteString(fmt.Sprintf("%s %s\n", labelStyle.Render(k), valueStyle.Render(v)))
 	}
 	kv("Instances", fmt.Sprintf("%d total · %d up", s.InstancesTotal, s.InstancesUp))
 	kv("Clients", fmt.Sprintf("%d", len(m.clients)))
 	kv("Binaries", fmt.Sprintf("%d", len(m.binaries)))
 	kv("RX total", formatBytes(s.RxBytes)+"  ("+formatBps(s.RxBps)+")")
 	kv("TX total", formatBytes(s.TxBytes)+"  ("+formatBps(s.TxBps)+")")
-	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("auto-refresh · r force · R reconcile · q quit"))
-	return panelStyle.Width(m.width - 4).Render(b.String())
+	return panelStyle.Width(w).Render(body.String())
 }
 
-func (m rootModel) viewEvents() string {
+func (m rootModel) viewEvents(w, mainH int) string {
+	cw := colWidths(w-2, []int{19, 6, 12, 14, 20}, 4)
 	var b strings.Builder
-	b.WriteString(headerStyle.Render("TIME                  LVL    KIND           INSTANCE        MESSAGE"))
+	hdr := fmt.Sprintf("%s %s %s %s %s",
+		padCell("TIME", cw[0]), padCell("LVL", cw[1]), padCell("KIND", cw[2]),
+		padCell("INSTANCE", cw[3]), padCell("MESSAGE", cw[4]))
+	b.WriteString(headerStyle.Render(hdr))
 	b.WriteString("\n")
+	limit := mainH - 6
+	if limit < 5 {
+		limit = 5
+	}
 	if len(m.events) == 0 {
-		b.WriteString(dimStyle.Render("\n  No events yet.\n"))
+		b.WriteString(dimStyle.Render("(no events)"))
+		b.WriteString("\n")
+		return b.String()
 	}
 	for i, e := range m.events {
-		line := fmt.Sprintf("%-21s %-6s %-14s %-15s %s",
-			e.TS.Format("2006-01-02 15:04:05"), trunc(e.Level, 6), trunc(e.Kind, 14),
-			trunc(e.Instance, 15), trunc(e.Message, 50))
+		if i >= limit {
+			break
+		}
+		line := fmt.Sprintf("%s %s %s %s %s",
+			padCell(e.TS.Format("2006-01-02 15:04:05"), cw[0]),
+			padCell(e.Level, cw[1]),
+			padCell(e.Kind, cw[2]),
+			padCell(e.Instance, cw[3]),
+			padCell(e.Message, cw[4]),
+		)
 		if i == m.cursor {
-			b.WriteString(selStyle.Render("▸ " + line))
+			b.WriteString(selStyle.Width(w).Render(line))
+		} else if e.Level == "warn" || e.Level == "error" {
+			b.WriteString(warnStyle.Render(line))
 		} else {
-			b.WriteString("  " + line)
+			b.WriteString(line)
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("r refresh · q quit"))
 	return b.String()
 }
 
-func (m rootModel) viewInstDetail() string {
+func (m rootModel) viewInstDetail(w, h int) string {
 	inst := m.detailInst
 	if inst == nil {
 		return ""
 	}
-	var b strings.Builder
-	b.WriteString(titleStyle.Render("Instance · " + inst.Name))
-	b.WriteString("\n\n")
+	var body strings.Builder
+	body.WriteString(titleStyle.Render("Instance · " + inst.Name))
+	body.WriteString("\n\n")
 	kv := func(k, v string) {
-		b.WriteString(labelStyle.Render(k))
-		b.WriteString(valueStyle.Render(v))
-		b.WriteString("\n")
+		body.WriteString(fmt.Sprintf("%s %s\n", labelStyle.Render(k), valueStyle.Render(v)))
 	}
 	up := "down"
 	if inst.Up {
@@ -857,7 +992,7 @@ func (m rootModel) viewInstDetail() string {
 	}
 	kv("Role", inst.Role)
 	kv("State", fmt.Sprintf("%s · enabled=%v · pid=%d", up, inst.Enabled, inst.PID))
-	kv("Binary", inst.BinaryName+" "+inst.BinaryPath)
+	kv("Binary", strings.TrimSpace(inst.BinaryName+" "+inst.BinaryPath))
 	kv("Listen", fmt.Sprintf("%s %s:%d", inst.Proto, orDash(inst.LocalBind), inst.Port))
 	kv("Network", orDash(inst.ServerNetwork)+"  topology="+orDash(inst.Topology))
 	kv("Public EP", orDash(inst.PublicEndpoint))
@@ -867,7 +1002,6 @@ func (m rootModel) viewInstDetail() string {
 	if inst.LastError != "" {
 		kv("Error", inst.LastError)
 	}
-	// related clients
 	var related []pkgapi.ServerClient
 	for _, cl := range m.clients {
 		if cl.InstanceName == inst.Name {
@@ -875,30 +1009,26 @@ func (m rootModel) viewInstDetail() string {
 		}
 	}
 	if len(related) > 0 {
-		b.WriteString("\n")
-		b.WriteString(headerStyle.Render("Clients on this instance"))
-		b.WriteString("\n")
+		body.WriteString("\n")
+		body.WriteString(headerStyle.Render("Clients on this instance"))
+		body.WriteString("\n")
 		for _, cl := range related {
-			b.WriteString(fmt.Sprintf("  · %-16s %-12s %s\n", cl.CommonName, cl.StaticIP, map[bool]string{true: "SUSP", false: ""}[cl.Suspended]))
+			body.WriteString(fmt.Sprintf("  · %-20s %-16s %s\n", cl.CommonName, cl.StaticIP, map[bool]string{true: "SUSP", false: ""}[cl.Suspended]))
 		}
 	}
-	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("u/d up/down · r restart · e export conf · n new client · D delete · esc back"))
-	return panelStyle.Width(m.width - 4).Render(b.String())
+	return panelStyle.Width(w).Height(h).MaxHeight(h).Render(body.String())
 }
 
-func (m rootModel) viewClientDetail() string {
+func (m rootModel) viewClientDetail(w, h int) string {
 	cl := m.detailClient
 	if cl == nil {
 		return ""
 	}
-	var b strings.Builder
-	b.WriteString(titleStyle.Render("Client · " + cl.CommonName))
-	b.WriteString("\n\n")
+	var body strings.Builder
+	body.WriteString(titleStyle.Render("Client · " + cl.CommonName))
+	body.WriteString("\n\n")
 	kv := func(k, v string) {
-		b.WriteString(labelStyle.Render(k))
-		b.WriteString(valueStyle.Render(v))
-		b.WriteString("\n")
+		body.WriteString(fmt.Sprintf("%s %s\n", labelStyle.Render(k), valueStyle.Render(v)))
 	}
 	kv("Instance", cl.InstanceName)
 	kv("Name", orDash(cl.Name))
@@ -910,17 +1040,15 @@ func (m rootModel) viewClientDetail() string {
 	kv("Cert path", orDash(cl.ClientCertPath))
 	kv("Key path", orDash(cl.ClientKeyPath))
 	kv("Traffic", formatBytes(cl.RxBytes)+" / "+formatBytes(cl.TxBytes)+"  ("+formatBps(cl.RxBps)+" / "+formatBps(cl.TxBps)+")")
-	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("s/S suspend/resume · t reset traffic · c .ovpn · p/L profile link · D delete · esc back"))
-	return panelStyle.Width(m.width - 4).Render(b.String())
+	return panelStyle.Width(w).Height(h).MaxHeight(h).Render(body.String())
 }
 
-func (m rootModel) viewConf() string {
-	var b strings.Builder
-	b.WriteString(titleStyle.Render(m.confTitle))
-	b.WriteString("\n\n")
+func (m rootModel) viewConf(w, h int) string {
+	var body strings.Builder
+	body.WriteString(titleStyle.Render(m.confTitle))
+	body.WriteString("\n\n")
 	lines := strings.Split(m.confBody, "\n")
-	maxLines := m.height - 10
+	maxLines := h - 8
 	if maxLines < 5 {
 		maxLines = 5
 	}
@@ -930,54 +1058,66 @@ func (m rootModel) viewConf() string {
 	}
 	end := min(len(lines), start+maxLines)
 	for _, line := range lines[start:end] {
-		b.WriteString(dimStyle.Render(line))
-		b.WriteString("\n")
+		body.WriteString(dimStyle.Render(trunc(line, max(20, w-6))))
+		body.WriteString("\n")
 	}
 	if m.confQR != "" {
-		b.WriteString("\n")
-		b.WriteString(m.confQR)
+		body.WriteString("\n")
+		body.WriteString(m.confQR)
 	}
-	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("↑↓ scroll · esc/enter back"))
-	return panelStyle.Width(m.width - 4).Render(b.String())
+	return panelStyle.Width(w).Height(h).MaxHeight(h).Render(body.String())
 }
 
-func (m rootModel) viewProfileLink() string {
+func (m rootModel) viewProfileLink(w, h int) string {
 	link := m.profileLink
 	if link == nil {
 		return ""
 	}
-	var b strings.Builder
-	b.WriteString(titleStyle.Render("Profile link · " + link.CommonName))
-	b.WriteString("\n\n")
+	var body strings.Builder
+	body.WriteString(titleStyle.Render("Profile link · " + link.CommonName))
+	body.WriteString("\n\n")
 	kv := func(k, v string) {
-		b.WriteString(labelStyle.Render(k))
-		b.WriteString(valueStyle.Render(v))
-		b.WriteString("\n")
+		body.WriteString(fmt.Sprintf("%s %s\n", labelStyle.Render(k), valueStyle.Render(v)))
 	}
 	kv("Download", link.DownloadURL)
 	kv("Import", link.ImportURL)
 	kv("Expires", link.ExpiresAt.Format("2006-01-02 15:04:05"))
 	kv("Max uses", fmt.Sprintf("%d (used %d)", link.MaxUses, link.UseCount))
 	if m.confQR != "" {
-		b.WriteString("\n")
-		b.WriteString(headerStyle.Render("QR (OpenVPN Connect import URL)"))
-		b.WriteString("\n")
-		b.WriteString(m.confQR)
+		body.WriteString("\n")
+		body.WriteString(headerStyle.Render("QR (OpenVPN Connect import URL)"))
+		body.WriteString("\n")
+		body.WriteString(m.confQR)
 	}
-	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("share import URL with user · esc/enter back"))
-	return panelStyle.Width(m.width - 4).Render(b.String())
+	return panelStyle.Width(w).Height(h).MaxHeight(h).Render(body.String())
 }
 
 func trunc(s string, n int) string {
-	if len(s) <= n {
+	if n <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= n {
 		return s
 	}
-	if n <= 1 {
-		return s[:n]
+	// rune-safe truncate by visible width
+	var b strings.Builder
+	w := 0
+	for _, r := range s {
+		rw := 1
+		if r > 127 {
+			rw = lipgloss.Width(string(r))
+			if rw < 1 {
+				rw = 1
+			}
+		}
+		if w+rw >= n {
+			b.WriteRune('…')
+			break
+		}
+		b.WriteRune(r)
+		w += rw
 	}
-	return s[:n-1] + "…"
+	return b.String()
 }
 
 func orDash(s string) string {
