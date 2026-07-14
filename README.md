@@ -104,7 +104,6 @@ export OPENVPNCTL_TOKEN=dev-token
 | `c` | Show `.ovpn` |
 | `R` | Force reconcile |
 | `q` | Quit |
-```
 
 ## Multi-binary
 
