@@ -33,7 +33,18 @@ func TestRenderServer(t *testing.T) {
 	require.Contains(t, res.Content, "management ")
 	require.Contains(t, res.Content, "client-config-dir")
 	require.Contains(t, res.Content, `push "dhcp-option DNS 1.1.1.1"`)
+	require.Contains(t, res.Content, "dh ") // path or "none"
 	require.NotEmpty(t, res.Hash)
+}
+
+func TestRenderServerDHNone(t *testing.T) {
+	inst := db.Instance{
+		Name: "ovpn0", Role: "server", Port: 1194, ServerNetwork: "10.8.0.0/24",
+		AuthMode: "pki", PKICaPath: "/pki/ca.crt", PKICertPath: "/pki/s.crt", PKIKeyPath: "/pki/s.key",
+	}
+	res, err := confgen.RenderInstance(inst, confgen.Paths{ConfDir: "/tmp", RuntimeDir: "/tmp", Name: "ovpn0"}, nil)
+	require.NoError(t, err)
+	require.Contains(t, res.Content, "dh none")
 }
 
 func TestRenderClient(t *testing.T) {

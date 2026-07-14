@@ -101,6 +101,19 @@ func (s *Server) Router() http.Handler {
 		r.Get("/instances/{name}/clients/{cn}/client-config", s.handleClientConfig)
 		r.Post("/instances/{name}/clients/{cn}/profile-link", s.handleCreateProfileLink)
 		r.Get("/instances/{name}/clients/{cn}/profile-links", s.handleListProfileLinks)
+		r.Post("/instances/{name}/clients/{cn}/issue-cert", s.handleIssueClientCert)
+		r.Post("/instances/{name}/issue-server-cert", s.handleIssueServerCert)
+
+		// PKI / mTLS
+		r.Get("/pki/cas", s.handleListCAs)
+		r.Post("/pki/cas", s.handleCreateCA)
+		r.Get("/pki/cas/{name}", s.handleGetCA)
+		r.Delete("/pki/cas/{name}", s.handleDeleteCA)
+		r.Get("/pki/certs", s.handleListCerts)
+		r.Post("/pki/certs", s.handleIssueCert)
+		r.Get("/pki/certs/{id}", s.handleGetCert)
+		r.Get("/pki/tls-crypt", s.handleListTLSCrypt)
+		r.Post("/pki/tls-crypt", s.handleGenerateTLSCrypt)
 
 		r.Delete("/profile-tokens/{token}", s.handleRevokeProfileLink)
 	})

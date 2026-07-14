@@ -15,6 +15,7 @@ openvpnd is under active development. This document tracks what works today vs p
 - [x] REST API (bearer auth)
 - [x] Prometheus exporter (instance/client metrics + reconcile histograms)
 - [x] SNMPv2c agent (optional; GET/GETNEXT/GETBULK)
+- [x] Managed PKI: CA create, server/client issue, tls-crypt, wire to instances/clients
 - [x] Client `.ovpn` export (inline PEMs from paths)
 - [x] Presigned profile links + `openvpn://import-profile/` deep links
 - [x] Example configs, systemd unit, docs
@@ -28,7 +29,7 @@ OpenVPN has hundreds of options. First-class coverage is intentional and incompl
 
 | Area | Status |
 |------|--------|
-| Managed PKI (issue/sign/revoke/CRL) | Planned |
+| Managed PKI (CA + issue server/client + tls-crypt) | Done (CRL later) |
 | Conf import / adopt running processes | Planned |
 | TAP / `server-bridge` / VLAN | Not started |
 | IPv6 pools | Not started |
@@ -41,11 +42,11 @@ OpenVPN has hundreds of options. First-class coverage is intentional and incompl
 
 ## Roadmap (priority order)
 
-1. Managed PKI + seamless profile minting
+1. CRL / revoke + renew UX
 2. Conf parse/import + adopt
 3. Richer typed options (common 80%)
 4. CCD/`iroute`/ACL model
-5. TUI + operator polish
+5. TUI PKI screens
 6. Advanced modes (bridge, IPv6, proxies) as needed
 
 ## Comparison to wireguardd

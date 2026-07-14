@@ -33,6 +33,7 @@ func main() {
 		instanceCmd(&configPath),
 		clientCmd(&configPath),
 		binaryCmd(&configPath),
+		pkiCmd(&configPath),
 		statsCmd(&configPath),
 		reconcileCmd(&configPath),
 		eventsCmd(&configPath),
@@ -195,6 +196,26 @@ func instanceCmd(configPath *string) *cobra.Command {
 			return c.InstanceDown(context.Background(), args[0])
 		},
 	})
+	var caName, serverCN string
+	var genTC bool
+	issueSrv := &cobra.Command{
+		Use:   "issue-cert NAME",
+		Short: "Issue server cert from CA and wire instance PKI paths",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, c, err := loadClient(*configPath)
+			if err != nil {
+				return err
+			}
+			return c.IssueServerCert(context.Background(), args[0], pkgapi.IssueServerCertRequest{
+				CAName: caName, CommonName: serverCN, GenerateTLSCrypt: genTC,
+			})
+		},
+	}
+	issueSrv.Flags().StringVar(&caName, "ca", "", "CA name (default first)")
+	issueSrv.Flags().StringVar(&serverCN, "cn", "", "server CN (default public_endpoint host or name)")
+	issueSrv.Flags().BoolVar(&genTC, "tls-crypt", true, "generate tls-crypt key for instance")
+	cmd.AddCommand(issueSrv)
 	return cmd
 }
 
@@ -300,6 +321,127 @@ func clientCmd(configPath *string) *cobra.Command {
 			}
 			fmt.Print(body)
 			return nil
+		},
+	})
+	var issueCA string
+	issueCli := &cobra.Command{
+		Use:   "issue-cert INSTANCE CN",
+		Short: "Issue client cert from CA and wire paths",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, c, err := loadClient(*configPath)
+			if err != nil {
+				return err
+			}
+			return c.IssueClientCert(context.Background(), args[0], args[1], pkgapi.IssueClientCertRequest{CAName: issueCA})
+		},
+	}
+	issueCli.Flags().StringVar(&issueCA, "ca", "", "CA name (default first / instance CA)")
+	cmd.AddCommand(issueCli)
+	return cmd
+}
+
+func pkiCmd(configPath *string) *cobra.Command {
+	cmd := &cobra.Command{Use: "pki", Short: "Certificate authority and mTLS material"}
+	cmd.AddCommand(&cobra.Command{
+		Use:   "ca-list",
+		Short: "List CAs",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, c, err := loadClient(*configPath)
+			if err != nil {
+				return err
+			}
+			list, err := c.ListCAs(context.Background())
+			if err != nil {
+				return err
+			}
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "NAME\tCN\tNOT_AFTER\tCERT")
+			for _, ca := range list {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", ca.Name, ca.CommonName, ca.NotAfter, ca.CertPath)
+			}
+			return w.Flush()
+		},
+	})
+	var org string
+	var days int
+	caCreate := &cobra.Command{
+		Use:   "ca-create [NAME]",
+		Short: "Create a new CA (mTLS root)",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, c, err := loadClient(*configPath)
+			if err != nil {
+				return err
+			}
+			name := "default"
+			if len(args) == 1 {
+				name = args[0]
+			}
+			cn := "OpenVPNd CA " + name
+			if flagCN, _ := cmd.Flags().GetString("cn"); flagCN != "" {
+				cn = flagCN
+			}
+			out, err := c.CreateCA(context.Background(), pkgapi.CreateCARequest{
+				Name: name, CommonName: cn, Org: org, ValidDays: days,
+			})
+			if err != nil {
+				return err
+			}
+			return printJSON(out)
+		},
+	}
+	caCreate.Flags().String("cn", "", "CA common name")
+	caCreate.Flags().StringVar(&org, "org", "", "organization")
+	caCreate.Flags().IntVar(&days, "days", 3650, "validity days")
+	cmd.AddCommand(caCreate)
+
+	var certCA string
+	certList := &cobra.Command{
+		Use:   "cert-list",
+		Short: "List issued certificates",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, c, err := loadClient(*configPath)
+			if err != nil {
+				return err
+			}
+			list, err := c.ListCertificates(context.Background(), certCA)
+			if err != nil {
+				return err
+			}
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "ID\tCA\tKIND\tCN\tNOT_AFTER\tFINGERPRINT")
+			for _, cert := range list {
+				fp := cert.Fingerprint
+				if len(fp) > 16 {
+					fp = fp[:16] + "…"
+				}
+				fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\n", cert.ID, cert.CAName, cert.Kind, cert.CommonName, cert.NotAfter, fp)
+			}
+			return w.Flush()
+		},
+	}
+	certList.Flags().StringVar(&certCA, "ca", "", "filter by CA")
+	cmd.AddCommand(certList)
+
+	cmd.AddCommand(&cobra.Command{
+		Use:   "tls-crypt [NAME]",
+		Short: "Generate OpenVPN tls-crypt static key",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, c, err := loadClient(*configPath)
+			if err != nil {
+				return err
+			}
+			name := "default"
+			if len(args) == 1 {
+				name = args[0]
+			}
+			out, err := c.GenerateTLSCrypt(context.Background(), name)
+			if err != nil {
+				return err
+			}
+			return printJSON(out)
 		},
 	})
 	return cmd

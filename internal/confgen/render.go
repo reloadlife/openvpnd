@@ -106,8 +106,13 @@ func RenderInstance(inst db.Instance, paths Paths, clients []db.Client) (RenderR
 		if inst.PKIKeyPath != "" {
 			fmt.Fprintf(&b, "key %s\n", inst.PKIKeyPath)
 		}
-		if inst.PKIDHPath != "" && inst.Role == "server" {
-			fmt.Fprintf(&b, "dh %s\n", inst.PKIDHPath)
+		if inst.Role == "server" {
+			if inst.PKIDHPath != "" {
+				fmt.Fprintf(&b, "dh %s\n", inst.PKIDHPath)
+			} else {
+				// Modern OpenVPN: ECDHE without static DH params.
+				fmt.Fprintf(&b, "dh none\n")
+			}
 		}
 		if inst.PKITLSCryptPath != "" {
 			fmt.Fprintf(&b, "tls-crypt %s\n", inst.PKITLSCryptPath)

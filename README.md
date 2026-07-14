@@ -43,6 +43,7 @@ Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Design and domain model |
 | [docs/STATUS.md](docs/STATUS.md) | What works / roadmap / gaps |
 | [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) | Prometheus + SNMP |
+| [docs/PKI.md](docs/PKI.md) | CA / mTLS certs |
 | [SECURITY.md](SECURITY.md) | Reporting + hardening |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Dev workflow |
 
@@ -114,6 +115,16 @@ export OPENVPNCTL_TOKEN=dev-token
 ```
 
 Each instance stores `binary_name` (or `binary_path` override). Changing the binary restarts the process on the next reconcile.
+
+## PKI / mTLS
+
+```bash
+openvpnctl pki ca-create default --cn "Homelab VPN CA"
+openvpnctl instance issue-cert ovpn0 --ca default --tls-crypt
+openvpnctl client issue-cert ovpn0 alice --ca default
+```
+
+Details: [docs/PKI.md](docs/PKI.md)
 
 ## One-click client install (presigned URL)
 

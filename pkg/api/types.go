@@ -196,7 +196,10 @@ type ClientCreateRequest struct {
 	CertRef           string   `json:"cert_ref,omitempty"`
 	ClientCertPath    string   `json:"client_cert_path,omitempty"`
 	ClientKeyPath     string   `json:"client_key_path,omitempty"`
-	Tags              []string `json:"tags,omitempty"`
+	// IssueCert issues a client cert under CAName (or default CA) and sets paths.
+	IssueCert bool   `json:"issue_cert,omitempty"`
+	CAName    string `json:"ca_name,omitempty"`
+	Tags      []string `json:"tags,omitempty"`
 }
 
 // ClientUpdateRequest patches a client.
@@ -285,4 +288,87 @@ type Stats struct {
 	TxBytes        int64   `json:"tx_bytes"`
 	RxBps          float64 `json:"rx_bps"`
 	TxBps          float64 `json:"tx_bps"`
+}
+
+// CA is a managed certificate authority.
+type CA struct {
+	Name       string    `json:"name"`
+	CommonName string    `json:"common_name"`
+	Org        string    `json:"org,omitempty"`
+	CertPath   string    `json:"cert_path"`
+	KeyPath    string    `json:"key_path"`
+	NotAfter   string    `json:"not_after,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// CreateCARequest creates a new CA.
+type CreateCARequest struct {
+	Name       string `json:"name,omitempty"`
+	CommonName string `json:"common_name"`
+	Org        string `json:"org,omitempty"`
+	ValidDays  int    `json:"valid_days,omitempty"`
+	KeyType    string `json:"key_type,omitempty"` // ec | rsa
+	RSABits    int    `json:"rsa_bits,omitempty"`
+}
+
+// Certificate is a managed leaf cert.
+type Certificate struct {
+	ID           int64     `json:"id"`
+	CAName       string    `json:"ca_name"`
+	Kind         string    `json:"kind"`
+	CommonName   string    `json:"common_name"`
+	CertPath     string    `json:"cert_path"`
+	KeyPath      string    `json:"key_path"`
+	NotBefore    string    `json:"not_before,omitempty"`
+	NotAfter     string    `json:"not_after,omitempty"`
+	Serial       int64     `json:"serial"`
+	Fingerprint  string    `json:"fingerprint,omitempty"`
+	Revoked      bool      `json:"revoked"`
+	InstanceName string    `json:"instance_name,omitempty"`
+	Notes        string    `json:"notes,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+// IssueCertRequest issues a leaf cert under a CA.
+type IssueCertRequest struct {
+	CAName       string   `json:"ca_name"`
+	Kind         string   `json:"kind"` // server | client
+	CommonName   string   `json:"common_name"`
+	ValidDays    int      `json:"valid_days,omitempty"`
+	DNSNames     []string `json:"dns_names,omitempty"`
+	IPs          []string `json:"ips,omitempty"`
+	KeyType      string   `json:"key_type,omitempty"`
+	InstanceName string   `json:"instance_name,omitempty"`
+}
+
+// IssueServerCertRequest wires a server cert onto an instance.
+type IssueServerCertRequest struct {
+	CAName           string   `json:"ca_name,omitempty"`
+	CommonName       string   `json:"common_name,omitempty"`
+	ValidDays        int      `json:"valid_days,omitempty"`
+	DNSNames         []string `json:"dns_names,omitempty"`
+	IPs              []string `json:"ips,omitempty"`
+	KeyType          string   `json:"key_type,omitempty"`
+	TLSCrypt         string   `json:"tls_crypt,omitempty"`          // existing named key
+	GenerateTLSCrypt bool     `json:"generate_tls_crypt,omitempty"` // create named after instance
+}
+
+// IssueClientCertRequest issues a client cert and attaches paths.
+type IssueClientCertRequest struct {
+	CAName    string `json:"ca_name,omitempty"`
+	ValidDays int    `json:"valid_days,omitempty"`
+	KeyType   string `json:"key_type,omitempty"`
+}
+
+// TLSCryptRequest names a tls-crypt key to generate.
+type TLSCryptRequest struct {
+	Name string `json:"name,omitempty"`
+}
+
+// TLSCryptKey is a named OpenVPN static key.
+type TLSCryptKey struct {
+	Name      string    `json:"name"`
+	Path      string    `json:"path"`
+	CreatedAt time.Time `json:"created_at"`
 }

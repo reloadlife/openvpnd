@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -72,6 +73,29 @@ func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusConflict, "create_failed", err.Error())
 		return
+	}
+	if req.IssueCert {
+		caName := req.CAName
+		if caName == "" {
+			if cas, _ := s.store.ListCAs(r.Context()); len(cas) > 0 {
+				caName = cas[0].Name
+			}
+		}
+		if caName == "" {
+			writeError(w, http.StatusBadRequest, "no_ca", "client created but issue_cert needs a CA (POST /v1/pki/cas first)")
+			return
+		}
+		issued, rec, err := s.issueAndStore(r, caName, "client", c.CommonName, 0, nil, nil, "", name)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "issue_failed", "client created but cert issue failed: "+err.Error())
+			return
+		}
+		c.ClientCertPath = issued.CertPath
+		c.ClientKeyPath = issued.KeyPath
+		c.CertRef = fmt.Sprintf("%s/%d", rec.CAName, rec.ID)
+		if updated, err := s.store.UpdateClient(r.Context(), name, c.CommonName, c); err == nil {
+			c = updated
+		}
 	}
 	_ = s.store.AddEvent(r.Context(), "info", "create", name, c.CommonName, "client created", "{}")
 	_ = s.ForceReconcile(r.Context())

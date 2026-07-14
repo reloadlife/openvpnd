@@ -344,3 +344,71 @@ func (c *Client) Stats(ctx context.Context) (Stats, error) {
 func (c *Client) Reconcile(ctx context.Context) error {
 	return c.do(ctx, http.MethodPost, "/v1/reconcile", nil, nil)
 }
+
+// ListCAs returns managed CAs.
+func (c *Client) ListCAs(ctx context.Context) ([]CA, error) {
+	var out []CA
+	err := c.do(ctx, http.MethodGet, "/v1/pki/cas", nil, &out)
+	return out, err
+}
+
+// CreateCA creates a new CA.
+func (c *Client) CreateCA(ctx context.Context, req CreateCARequest) (CA, error) {
+	var out CA
+	err := c.do(ctx, http.MethodPost, "/v1/pki/cas", req, &out)
+	return out, err
+}
+
+// GetCA returns one CA.
+func (c *Client) GetCA(ctx context.Context, name string) (CA, error) {
+	var out CA
+	err := c.do(ctx, http.MethodGet, "/v1/pki/cas/"+name, nil, &out)
+	return out, err
+}
+
+// DeleteCA removes CA metadata.
+func (c *Client) DeleteCA(ctx context.Context, name string) error {
+	return c.do(ctx, http.MethodDelete, "/v1/pki/cas/"+name, nil, nil)
+}
+
+// ListCertificates lists certs; ca optional filter.
+func (c *Client) ListCertificates(ctx context.Context, ca string) ([]Certificate, error) {
+	path := "/v1/pki/certs"
+	if ca != "" {
+		path += "?ca=" + ca
+	}
+	var out []Certificate
+	err := c.do(ctx, http.MethodGet, path, nil, &out)
+	return out, err
+}
+
+// IssueCert issues a leaf cert.
+func (c *Client) IssueCert(ctx context.Context, req IssueCertRequest) (Certificate, error) {
+	var out Certificate
+	err := c.do(ctx, http.MethodPost, "/v1/pki/certs", req, &out)
+	return out, err
+}
+
+// GenerateTLSCrypt creates a tls-crypt key.
+func (c *Client) GenerateTLSCrypt(ctx context.Context, name string) (TLSCryptKey, error) {
+	var out TLSCryptKey
+	err := c.do(ctx, http.MethodPost, "/v1/pki/tls-crypt", TLSCryptRequest{Name: name}, &out)
+	return out, err
+}
+
+// ListTLSCrypt lists tls-crypt keys.
+func (c *Client) ListTLSCrypt(ctx context.Context) ([]TLSCryptKey, error) {
+	var out []TLSCryptKey
+	err := c.do(ctx, http.MethodGet, "/v1/pki/tls-crypt", nil, &out)
+	return out, err
+}
+
+// IssueServerCert issues server cert and wires instance PKI paths.
+func (c *Client) IssueServerCert(ctx context.Context, instance string, req IssueServerCertRequest) error {
+	return c.do(ctx, http.MethodPost, "/v1/instances/"+instance+"/issue-server-cert", req, nil)
+}
+
+// IssueClientCert issues client cert and wires client paths.
+func (c *Client) IssueClientCert(ctx context.Context, instance, cn string, req IssueClientCertRequest) error {
+	return c.do(ctx, http.MethodPost, "/v1/instances/"+instance+"/clients/"+cn+"/issue-cert", req, nil)
+}
