@@ -1,0 +1,42 @@
+listen:
+  http: "127.0.0.1:51980"
+  # unix: "/run/openvpnd/openvpnd.sock"
+  metrics: "127.0.0.1:9092"
+
+db:
+  path: "/var/lib/openvpnd/state.db"
+  # timeseries_path: "/var/lib/openvpnd/timeseries.db"
+
+auth:
+  token: "change-me"
+
+# Externally reachable base for client profile links (OpenVPN Connect import).
+# Behind reverse proxy: https://vpn.example.com
+# public_base_url: "https://vpn.example.com"
+
+profile_links:
+  default_ttl: 24h
+  default_max_uses: 1   # single-use download; 0 = unlimited until expiry
+
+openvpn:
+  conf_dir: "/etc/openvpnd/instances"
+  runtime_dir: "/run/openvpnd"
+  pki_dir: "/var/lib/openvpnd/pki"
+  persistence: "hybrid" # database | conf | hybrid
+  default_binary: "default"
+  # Named OpenVPN executables. Each instance can pin binary_name or binary_path.
+  binaries:
+    default: "/usr/sbin/openvpn"
+    # v24: "/opt/openvpn-2.4/sbin/openvpn"
+    # v26: "/opt/openvpn-2.6/sbin/openvpn"
+  sample_interval: 5s
+  reconcile_interval: 5s
+  allow_hooks: false
+  # use_mock_backend: true  # for dev/CI without openvpn binary
+  adopt_on_start: false
+
+log:
+  level: info
+  format: json
+
+read_only: false

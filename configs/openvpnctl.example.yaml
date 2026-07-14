@@ -1,0 +1,6 @@
+server:
+  url: "http://127.0.0.1:51980"
+  # unix: "/run/openvpnd/openvpnd.sock"
+  token: "change-me"
+
+refresh_interval: 2s
