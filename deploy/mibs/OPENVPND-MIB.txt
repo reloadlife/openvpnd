@@ -1,0 +1,289 @@
+OPENVPND-MIB DEFINITIONS ::= BEGIN
+
+IMPORTS
+    MODULE-IDENTITY, OBJECT-TYPE, Integer32, Counter64, Gauge32,
+    TimeTicks, enterprises
+        FROM SNMPv2-SMI
+    DisplayString
+        FROM SNMPv2-TC
+    OBJECT-GROUP, MODULE-COMPLIANCE
+        FROM SNMPv2-CONF;
+
+-- Placeholder private enterprise number 66666.2 (wireguardd uses 66666.1).
+-- Replace with a registered IANA PEN for production deployments.
+
+openvpnd MODULE-IDENTITY
+    LAST-UPDATED "202607140000Z"
+    ORGANIZATION "reloadlife"
+    CONTACT-INFO "https://github.com/reloadlife/openvpnd"
+    DESCRIPTION
+        "SNMPv2c MIB for the openvpnd OpenVPN management daemon.
+         Provides instance and client operational statistics."
+    REVISION "202607140000Z"
+    DESCRIPTION "Full SNMPv2c agent: scalars + instance/client tables."
+    ::= { enterprises 66666 2 }
+
+-- ============================================================
+-- Scalars
+-- ============================================================
+
+ovpnScalars OBJECT IDENTIFIER ::= { openvpnd 1 }
+
+ovpnInstanceCount OBJECT-TYPE
+    SYNTAX      Integer32 (0..2147483647)
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Number of managed OpenVPN instances."
+    ::= { ovpnScalars 1 }
+
+ovpnClientCount OBJECT-TYPE
+    SYNTAX      Integer32 (0..2147483647)
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Number of tracked server clients across all instances."
+    ::= { ovpnScalars 2 }
+
+ovpnAgentUptime OBJECT-TYPE
+    SYNTAX      TimeTicks
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Time since openvpnd SNMP agent started (hundredths of a second)."
+    ::= { ovpnScalars 3 }
+
+-- ============================================================
+-- Instance table  (openvpnd.2.1.column.rowIndex)
+-- ============================================================
+
+ovpnInstanceTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF OvpnInstanceEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "OpenVPN instances managed by openvpnd."
+    ::= { openvpnd 2 }
+
+ovpnInstanceEntry OBJECT-TYPE
+    SYNTAX      OvpnInstanceEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "A single OpenVPN process instance."
+    INDEX       { ovpnInstIndex }
+    ::= { ovpnInstanceTable 1 }
+
+OvpnInstanceEntry ::= SEQUENCE {
+    ovpnInstIndex              Integer32,
+    ovpnInstName               DisplayString,
+    ovpnInstRole               DisplayString,
+    ovpnInstUp                 Integer32,
+    ovpnInstPort               Integer32,
+    ovpnInstConnectedClients   Integer32,
+    ovpnInstRxBytes            Counter64,
+    ovpnInstTxBytes            Counter64,
+    ovpnInstRxBps              Gauge32,
+    ovpnInstTxBps              Gauge32,
+    ovpnInstPid                Integer32
+}
+
+ovpnInstIndex OBJECT-TYPE
+    SYNTAX      Integer32 (1..2147483647)
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "Instance table index."
+    ::= { ovpnInstanceEntry 1 }
+
+ovpnInstName OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Instance name."
+    ::= { ovpnInstanceEntry 2 }
+
+ovpnInstRole OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "server or client."
+    ::= { ovpnInstanceEntry 3 }
+
+ovpnInstUp OBJECT-TYPE
+    SYNTAX      Integer32 (0..1)
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "1 if process is up."
+    ::= { ovpnInstanceEntry 4 }
+
+ovpnInstPort OBJECT-TYPE
+    SYNTAX      Integer32 (0..65535)
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Configured port."
+    ::= { ovpnInstanceEntry 5 }
+
+ovpnInstConnectedClients OBJECT-TYPE
+    SYNTAX      Integer32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Connected clients (server role)."
+    ::= { ovpnInstanceEntry 6 }
+
+ovpnInstRxBytes OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Receive bytes."
+    ::= { ovpnInstanceEntry 7 }
+
+ovpnInstTxBytes OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Transmit bytes."
+    ::= { ovpnInstanceEntry 8 }
+
+ovpnInstRxBps OBJECT-TYPE
+    SYNTAX      Gauge32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Receive rate (bytes/sec)."
+    ::= { ovpnInstanceEntry 9 }
+
+ovpnInstTxBps OBJECT-TYPE
+    SYNTAX      Gauge32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Transmit rate (bytes/sec)."
+    ::= { ovpnInstanceEntry 10 }
+
+ovpnInstPid OBJECT-TYPE
+    SYNTAX      Integer32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Process ID."
+    ::= { ovpnInstanceEntry 11 }
+
+-- ============================================================
+-- Client table  (openvpnd.3.1.column.rowIndex)
+-- ============================================================
+
+ovpnClientTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF OvpnClientEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "Server-side clients tracked by openvpnd."
+    ::= { openvpnd 3 }
+
+ovpnClientEntry OBJECT-TYPE
+    SYNTAX      OvpnClientEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "A single server client (CN)."
+    INDEX       { ovpnCliIndex }
+    ::= { ovpnClientTable 1 }
+
+OvpnClientEntry ::= SEQUENCE {
+    ovpnCliIndex            Integer32,
+    ovpnCliInstance         DisplayString,
+    ovpnCliCommonName       DisplayString,
+    ovpnCliName             DisplayString,
+    ovpnCliRealAddress      DisplayString,
+    ovpnCliVirtualAddress   DisplayString,
+    ovpnCliConnected        Integer32,
+    ovpnCliSuspended        Integer32,
+    ovpnCliConnectedSince   Integer32,
+    ovpnCliRxBytes          Counter64,
+    ovpnCliTxBytes          Counter64,
+    ovpnCliRxBps            Gauge32,
+    ovpnCliTxBps            Gauge32
+}
+
+ovpnCliIndex OBJECT-TYPE
+    SYNTAX      Integer32 (1..2147483647)
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "Client table index."
+    ::= { ovpnClientEntry 1 }
+
+ovpnCliInstance OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Parent instance name."
+    ::= { ovpnClientEntry 2 }
+
+ovpnCliCommonName OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Certificate common name."
+    ::= { ovpnClientEntry 3 }
+
+ovpnCliName OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Display name."
+    ::= { ovpnClientEntry 4 }
+
+ovpnCliRealAddress OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Real (public) endpoint."
+    ::= { ovpnClientEntry 5 }
+
+ovpnCliVirtualAddress OBJECT-TYPE
+    SYNTAX      DisplayString
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Virtual (tunnel) address."
+    ::= { ovpnClientEntry 6 }
+
+ovpnCliConnected OBJECT-TYPE
+    SYNTAX      Integer32 (0..1)
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "1 if currently connected."
+    ::= { ovpnClientEntry 7 }
+
+ovpnCliSuspended OBJECT-TYPE
+    SYNTAX      Integer32 (0..1)
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "1 if suspended."
+    ::= { ovpnClientEntry 8 }
+
+ovpnCliConnectedSince OBJECT-TYPE
+    SYNTAX      Integer32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Unix timestamp of connection start."
+    ::= { ovpnClientEntry 9 }
+
+ovpnCliRxBytes OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Receive bytes."
+    ::= { ovpnClientEntry 10 }
+
+ovpnCliTxBytes OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Transmit bytes."
+    ::= { ovpnClientEntry 11 }
+
+ovpnCliRxBps OBJECT-TYPE
+    SYNTAX      Gauge32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Receive rate (bytes/sec)."
+    ::= { ovpnClientEntry 12 }
+
+ovpnCliTxBps OBJECT-TYPE
+    SYNTAX      Gauge32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Transmit rate (bytes/sec)."
+    ::= { ovpnClientEntry 13 }
+
+END

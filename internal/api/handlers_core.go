@@ -32,6 +32,8 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		HTTPListen:         s.cfg.Listen.HTTP,
 		UnixListen:         s.cfg.Listen.Unix,
 		MetricsListen:      s.cfg.Listen.Metrics,
+		SNMPEnabled:        s.cfg.SNMP.Enabled,
+		SNMPListen:         s.cfg.SNMP.Listen,
 		Persistence:        s.cfg.OpenVPN.Persistence,
 		ConfDir:            s.cfg.OpenVPN.ConfDir,
 		RuntimeDir:         s.cfg.OpenVPN.RuntimeDir,

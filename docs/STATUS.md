@@ -12,7 +12,9 @@ openvpnd is under active development. This document tracks what works today vs p
 - [x] Conf generation + CCD generation
 - [x] Host process backend + mock backend
 - [x] Reconciler loop (ensure conf/process, sample management)
-- [x] REST API (bearer auth) + Prometheus stub `/metrics`
+- [x] REST API (bearer auth)
+- [x] Prometheus exporter (instance/client metrics + reconcile histograms)
+- [x] SNMPv2c agent (optional; GET/GETNEXT/GETBULK)
 - [x] Client `.ovpn` export (inline PEMs from paths)
 - [x] Presigned profile links + `openvpn://import-profile/` deep links
 - [x] Example configs, systemd unit, docs

@@ -42,6 +42,7 @@ Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 | [docs/API.md](docs/API.md) | HTTP API routes |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Design and domain model |
 | [docs/STATUS.md](docs/STATUS.md) | What works / roadmap / gaps |
+| [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) | Prometheus + SNMP |
 | [SECURITY.md](SECURITY.md) | Reporting + hardening |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Dev workflow |
 
@@ -152,6 +153,13 @@ See [docs/INSTALL.md](docs/INSTALL.md).
 Env prefixes: `OPENVPND_*`, `OPENVPNCTL_*`.
 
 Default API: `127.0.0.1:51980` · metrics `9092` (avoids clash with wireguardd).
+
+## Observability
+
+- **Prometheus:** `listen.metrics` (default `127.0.0.1:9092`) and `/metrics` on the API
+- **SNMP:** optional SNMPv2c agent (`snmp.enabled`, default port `1162`)
+
+Metric names, scrape config, and OID map: [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) · MIB: [`deploy/mibs/OPENVPND-MIB.txt`](deploy/mibs/OPENVPND-MIB.txt)
 
 ## API
 

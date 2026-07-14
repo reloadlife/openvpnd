@@ -17,8 +17,10 @@ import (
 	"github.com/reloadlife/openvpnd/internal/api"
 	"github.com/reloadlife/openvpnd/internal/config"
 	"github.com/reloadlife/openvpnd/internal/db"
+	"github.com/reloadlife/openvpnd/internal/metrics"
 	"github.com/reloadlife/openvpnd/internal/ovpnbackend"
 	"github.com/reloadlife/openvpnd/internal/reconcile"
+	"github.com/reloadlife/openvpnd/internal/snmp"
 	"github.com/reloadlife/openvpnd/internal/stats"
 )
 
@@ -51,7 +53,6 @@ func (a *App) Run(ctx context.Context) error {
 		"timeseries", store.TimeseriesPath(),
 	)
 
-	// seed binaries from config
 	if err := store.EnsureBinaryDefaults(ctx, a.cfg.OpenVPN.Binaries); err != nil {
 		return fmt.Errorf("seed binaries: %w", err)
 	}
@@ -73,7 +74,6 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	defer func() { _ = backend.Close() }()
 
-	// probe configured binaries
 	for name, path := range a.cfg.OpenVPN.Binaries {
 		if ver, err := backend.ProbeBinary(ctx, path); err == nil {
 			_ = store.UpdateBinaryVersion(ctx, name, ver)
@@ -84,6 +84,8 @@ func (a *App) Run(ctx context.Context) error {
 	}
 
 	cache := stats.NewCache()
+	collector := metrics.New(cache, nil)
+
 	rec := reconcile.New(store, backend, cache, reconcile.Config{
 		ConfDir:        a.cfg.OpenVPN.ConfDir,
 		RuntimeDir:     a.cfg.OpenVPN.RuntimeDir,
@@ -91,6 +93,7 @@ func (a *App) Run(ctx context.Context) error {
 		SampleInterval: a.cfg.SampleInterval(),
 		AllowHooks:     a.cfg.OpenVPN.AllowHooks,
 	}, a.log)
+	rec.SetMetrics(collector)
 
 	srvAPI := api.NewServer(store, backend, cache, rec, a.cfg, a.log)
 	handler := srvAPI.Router()
@@ -145,6 +148,16 @@ func (a *App) Run(ctx context.Context) error {
 		servers = append(servers, s)
 		a.log.Info("metrics listening", "addr", a.cfg.Listen.Metrics)
 		go func() { errCh <- s.Serve(ln) }()
+	}
+
+	var snmpAgent *snmp.Agent
+	if a.cfg.SNMP.Enabled {
+		snmpAgent = snmp.NewAgent(a.cfg.SNMP.Listen, a.cfg.SNMP.Community, a.cfg.SNMP.EnterpriseOID, cache, a.log)
+		if err := snmpAgent.Start(); err != nil {
+			a.log.Error("snmp start failed", "err", err)
+		} else {
+			defer func() { _ = snmpAgent.Close() }()
+		}
 	}
 
 	select {

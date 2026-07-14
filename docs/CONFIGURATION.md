@@ -14,6 +14,10 @@ Default path after install: `/etc/openvpnd/config.yaml`
 | `listen.http` | API listen address (prefer `127.0.0.1:51980`) |
 | `listen.unix` | Optional Unix socket path |
 | `listen.metrics` | Prometheus listen (empty to disable dedicated listener) |
+| `snmp.enabled` | Enable SNMPv2c agent |
+| `snmp.listen` | UDP bind (default `127.0.0.1:1162`) |
+| `snmp.community` | SNMPv2c community (**change default**) |
+| `snmp.enterprise_oid` | Private enterprise base OID |
 | `db.path` | State SQLite path |
 | `openvpn.conf_dir` | Generated instance confs + CCD |
 | `openvpn.runtime_dir` | PID, management sockets, status, logs |
@@ -25,6 +29,8 @@ Default path after install: `/etc/openvpnd/config.yaml`
 | `public_base_url` | Public origin for profile links (`https://vpn.example.com`) |
 | `profile_links.default_ttl` | Default link lifetime (`24h`) |
 | `profile_links.default_max_uses` | Default downloads per link (`1`; `0` = unlimited until expiry) |
+
+See also [OBSERVABILITY.md](OBSERVABILITY.md) for Prometheus metric names and SNMP OID layout.
 
 ### Environment overrides
 

@@ -11,23 +11,25 @@ type VersionInfo struct {
 
 // DaemonConfig is non-secret runtime config.
 type DaemonConfig struct {
-	HTTPListen        string `json:"http_listen"`
-	UnixListen        string `json:"unix_listen,omitempty"`
-	MetricsListen     string `json:"metrics_listen,omitempty"`
-	Persistence       string `json:"persistence"`
-	ConfDir           string `json:"conf_dir"`
-	RuntimeDir        string `json:"runtime_dir"`
-	PKIDir            string `json:"pki_dir"`
-	DefaultBinary     string `json:"default_binary"`
-	SampleInterval    string `json:"sample_interval"`
-	ReconcileInterval string `json:"reconcile_interval"`
-	AllowHooks        bool   `json:"allow_hooks"`
-	DBPath            string `json:"db_path"`
-	TimeseriesPath    string `json:"timeseries_path,omitempty"`
-	PublicBaseURL     string `json:"public_base_url,omitempty"`
-	ProfileLinkTTL    string `json:"profile_link_ttl,omitempty"`
-	ProfileLinkMaxUses int   `json:"profile_link_max_uses,omitempty"`
-	ReadOnly          bool   `json:"read_only"`
+	HTTPListen         string `json:"http_listen"`
+	UnixListen         string `json:"unix_listen,omitempty"`
+	MetricsListen      string `json:"metrics_listen,omitempty"`
+	SNMPEnabled        bool   `json:"snmp_enabled"`
+	SNMPListen         string `json:"snmp_listen,omitempty"`
+	Persistence        string `json:"persistence"`
+	ConfDir            string `json:"conf_dir"`
+	RuntimeDir         string `json:"runtime_dir"`
+	PKIDir             string `json:"pki_dir"`
+	DefaultBinary      string `json:"default_binary"`
+	SampleInterval     string `json:"sample_interval"`
+	ReconcileInterval  string `json:"reconcile_interval"`
+	AllowHooks         bool   `json:"allow_hooks"`
+	DBPath             string `json:"db_path"`
+	TimeseriesPath     string `json:"timeseries_path,omitempty"`
+	PublicBaseURL      string `json:"public_base_url,omitempty"`
+	ProfileLinkTTL     string `json:"profile_link_ttl,omitempty"`
+	ProfileLinkMaxUses int    `json:"profile_link_max_uses,omitempty"`
+	ReadOnly           bool   `json:"read_only"`
 }
 
 // Binary is a named OpenVPN executable.

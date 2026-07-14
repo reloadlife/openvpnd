@@ -104,7 +104,7 @@ func (c *Cache) ListClients() []ClientStats {
 	return out
 }
 
-// Snapshot totals.
+// Snapshot returns global traffic rollups (API / TUI).
 func (c *Cache) Snapshot() (rx, tx int64, rxBps, txBps float64, up, total int) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -120,3 +120,19 @@ func (c *Cache) Snapshot() (rx, tx int64, rxBps, txBps float64, up, total int) {
 	}
 	return
 }
+
+// SnapshotMaps returns copies of all instance and client stats for exporters.
+func (c *Cache) SnapshotMaps() (map[string]InstanceStats, map[string]ClientStats) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	instances := make(map[string]InstanceStats, len(c.instances))
+	for k, v := range c.instances {
+		instances[k] = *v
+	}
+	clients := make(map[string]ClientStats, len(c.clients))
+	for k, v := range c.clients {
+		clients[k] = *v
+	}
+	return instances, clients
+}
+

@@ -23,6 +23,11 @@ type Config struct {
 	AllowHooks     bool
 }
 
+// MetricsObserver records reconcile timing (optional).
+type MetricsObserver interface {
+	ObserveReconcile(d time.Duration, err error)
+}
+
 // Reconciler applies desired state and samples stats.
 type Reconciler struct {
 	store   *db.Store
@@ -30,6 +35,7 @@ type Reconciler struct {
 	cache   *stats.Cache
 	cfg     Config
 	log     *slog.Logger
+	metrics MetricsObserver
 
 	mu         sync.Mutex
 	prevSample map[string]sample // key instance/cn
@@ -62,6 +68,13 @@ func New(store *db.Store, backend ovpnbackend.Backend, cache *stats.Cache, cfg C
 	}
 }
 
+// SetMetrics wires optional reconcile metrics.
+func (r *Reconciler) SetMetrics(m MetricsObserver) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.metrics = m
+}
+
 // Exclusive runs fn while holding the reconciler lock.
 func (r *Reconciler) Exclusive(fn func() error) error {
 	r.mu.Lock()
@@ -80,8 +93,12 @@ func (r *Reconciler) LastError() error {
 func (r *Reconciler) RunOnce(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	start := time.Now()
 	err := r.run(ctx)
 	r.lastErr = err
+	if r.metrics != nil {
+		r.metrics.ObserveReconcile(time.Since(start), err)
+	}
 	return err
 }
 

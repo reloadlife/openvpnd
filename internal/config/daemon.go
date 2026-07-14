@@ -15,6 +15,12 @@ type DaemonConfig struct {
 		Unix    string `mapstructure:"unix"`
 		Metrics string `mapstructure:"metrics"`
 	} `mapstructure:"listen"`
+	SNMP struct {
+		Enabled       bool   `mapstructure:"enabled"`
+		Listen        string `mapstructure:"listen"`
+		Community     string `mapstructure:"community"`
+		EnterpriseOID string `mapstructure:"enterprise_oid"`
+	} `mapstructure:"snmp"`
 	DB struct {
 		Path           string `mapstructure:"path"`
 		TimeseriesPath string `mapstructure:"timeseries_path"`
@@ -109,6 +115,11 @@ func setDaemonDefaults(v *viper.Viper) {
 	v.SetDefault("listen.http", "127.0.0.1:51980")
 	v.SetDefault("listen.unix", "")
 	v.SetDefault("listen.metrics", "127.0.0.1:9092")
+	// SNMP on 1162 by default so it does not clash with wireguardd's 1161.
+	v.SetDefault("snmp.enabled", false)
+	v.SetDefault("snmp.listen", "127.0.0.1:1162")
+	v.SetDefault("snmp.community", "change-me-snmp")
+	v.SetDefault("snmp.enterprise_oid", "1.3.6.1.4.1.66666.2")
 	v.SetDefault("db.path", "openvpnd.db")
 	v.SetDefault("auth.token", "change-me")
 	v.SetDefault("openvpn.conf_dir", "/etc/openvpnd/instances")
