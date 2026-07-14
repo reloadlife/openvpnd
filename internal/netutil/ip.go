@@ -132,3 +132,54 @@ func IsAutoToken(s string) bool {
 	s = strings.ToLower(strings.TrimSpace(s))
 	return s == "" || s == "auto" || s == "next" || s == "*"
 }
+
+// ValidateServerNetwork requires a usable IPv4 tunnel pool (prefix ≤ 30).
+func ValidateServerNetwork(cidr string) error {
+	if err := ValidateCIDR(cidr); err != nil {
+		return err
+	}
+	_, ipnet, err := net.ParseCIDR(strings.TrimSpace(cidr))
+	if err != nil {
+		return err
+	}
+	if ipnet.IP.To4() == nil {
+		return fmt.Errorf("only IPv4 server networks supported currently")
+	}
+	ones, bits := ipnet.Mask.Size()
+	if bits != 32 || ones > 30 {
+		return fmt.Errorf("server network too small (need /30 or larger, got /%d)", ones)
+	}
+	if ones < 8 {
+		return fmt.Errorf("server network too large (/%d)", ones)
+	}
+	return nil
+}
+
+// ValidatePublicEndpoint accepts host, host:port, or IP:port.
+func ValidatePublicEndpoint(s string) error {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return fmt.Errorf("empty")
+	}
+	if strings.Contains(s, " ") {
+		return fmt.Errorf("must not contain spaces")
+	}
+	// host only
+	if !strings.Contains(s, ":") {
+		if len(s) > 253 {
+			return fmt.Errorf("too long")
+		}
+		return nil
+	}
+	host, port, err := net.SplitHostPort(s)
+	if err != nil {
+		return fmt.Errorf("want host or host:port")
+	}
+	if host == "" || port == "" {
+		return fmt.Errorf("want host or host:port")
+	}
+	if _, err := net.LookupPort("udp", port); err != nil {
+		return fmt.Errorf("invalid port")
+	}
+	return nil
+}

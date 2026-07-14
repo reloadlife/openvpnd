@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -110,25 +111,30 @@ func instanceCmd(configPath *string) *cobra.Command {
 			return w.Flush()
 		},
 	})
-	var role, binary, network, remote string
+	var role, binary, network, remote, publicEP, pushDNS, topology, proto, caName string
 	var port int
+	var noCert, noTLSCrypt, createCA bool
 	create := &cobra.Command{
-		Use:   "create NAME",
-		Short: "Create an instance",
-		Args:  cobra.ExactArgs(1),
+		Use:   "create [NAME]",
+		Short: "Create an instance (auto name/network/port/PKI when omitted)",
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_, c, err := loadClient(*configPath)
 			if err != nil {
 				return err
 			}
-			req := pkgapi.InstanceCreateRequest{
-				Name: args[0], Role: role, BinaryName: binary, Port: port, ServerNetwork: network,
+			name := ""
+			if len(args) == 1 {
+				name = args[0]
 			}
-			if remote != "" && role == "client" {
-				req.Remotes = []pkgapi.Remote{{Host: remote, Port: port}}
-				if port == 0 {
-					req.Remotes[0].Port = 1194
-				}
+			issue := !noCert
+			genTC := !noTLSCrypt
+			req := pkgapi.InstanceCreateRequest{
+				Name: name, Role: role, BinaryName: binary, Port: port,
+				ServerNetwork: network, Topology: topology, Proto: proto,
+				Remote: remote, PublicEndpoint: publicEP, PushDNS: splitCSVFlag(pushDNS),
+				CAName: caName, CreateCAIfEmpty: createCA,
+				IssueServerCert: &issue, GenerateTLSCrypt: &genTC,
 			}
 			out, err := c.CreateInstance(context.Background(), req)
 			if err != nil {
@@ -138,10 +144,18 @@ func instanceCmd(configPath *string) *cobra.Command {
 		},
 	}
 	create.Flags().StringVar(&role, "role", "server", "server|client")
-	create.Flags().StringVar(&binary, "binary", "", "binary registry name")
-	create.Flags().IntVar(&port, "port", 1194, "listen/remote port")
-	create.Flags().StringVar(&network, "network", "", "server network CIDR (e.g. 10.8.0.0/24)")
-	create.Flags().StringVar(&remote, "remote", "", "client remote host")
+	create.Flags().StringVar(&binary, "binary", "", "binary registry name (default: default)")
+	create.Flags().IntVar(&port, "port", 0, "listen port (0=auto free from 1194)")
+	create.Flags().StringVar(&proto, "proto", "", "udp|tcp|… (default udp)")
+	create.Flags().StringVar(&network, "network", "", "server CIDR (empty=auto free 10.x.0.0/24)")
+	create.Flags().StringVar(&topology, "topology", "", "subnet|net30|p2p (default subnet)")
+	create.Flags().StringVar(&remote, "remote", "", "client remote host[:port[:proto]]")
+	create.Flags().StringVar(&publicEP, "public-endpoint", "", "vpn.example.com:1194")
+	create.Flags().StringVar(&pushDNS, "push-dns", "", "comma-separated DNS to push")
+	create.Flags().StringVar(&caName, "ca", "", "CA for auto issue")
+	create.Flags().BoolVar(&createCA, "create-ca", false, "create CA default if none")
+	create.Flags().BoolVar(&noCert, "no-cert", false, "do not auto-issue server cert")
+	create.Flags().BoolVar(&noTLSCrypt, "no-tls-crypt", false, "do not auto-generate tls-crypt")
 	cmd.AddCommand(create)
 
 	cmd.AddCommand(&cobra.Command{
@@ -196,7 +210,7 @@ func instanceCmd(configPath *string) *cobra.Command {
 			return c.InstanceDown(context.Background(), args[0])
 		},
 	})
-	var caName, serverCN string
+	var issueCAName, serverCN string
 	var genTC bool
 	issueSrv := &cobra.Command{
 		Use:   "issue-cert NAME",
@@ -208,11 +222,11 @@ func instanceCmd(configPath *string) *cobra.Command {
 				return err
 			}
 			return c.IssueServerCert(context.Background(), args[0], pkgapi.IssueServerCertRequest{
-				CAName: caName, CommonName: serverCN, GenerateTLSCrypt: genTC,
+				CAName: issueCAName, CommonName: serverCN, GenerateTLSCrypt: genTC,
 			})
 		},
 	}
-	issueSrv.Flags().StringVar(&caName, "ca", "", "CA name (default first)")
+	issueSrv.Flags().StringVar(&issueCAName, "ca", "", "CA name (default first)")
 	issueSrv.Flags().StringVar(&serverCN, "cn", "", "server CN (default public_endpoint host or name)")
 	issueSrv.Flags().BoolVar(&genTC, "tls-crypt", true, "generate tls-crypt key for instance")
 	cmd.AddCommand(issueSrv)
@@ -554,4 +568,19 @@ func printJSON(v any) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
+}
+
+func splitCSVFlag(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

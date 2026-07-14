@@ -274,22 +274,39 @@ func instanceCreateFields(binaries []string) []fieldDef {
 		bins = []string{"default"}
 	}
 	return []fieldDef{
-		{Key: "name", Label: "Name", Hint: "e.g. ovpn0"},
+		{Key: "name", Label: "Name", Hint: "empty/auto → ovpn0, ovpn1…"},
 		{Key: "role", Label: "Role", Kind: fieldSelect, Options: []string{"server", "client"}},
 		{Key: "binary", Label: "Binary", Kind: fieldSelect, Options: bins},
-		{Key: "port", Label: "Port", Hint: "1194"},
-		{Key: "proto", Label: "Proto", Kind: fieldSelect, Options: []string{"udp", "tcp", "udp4", "tcp4"}},
-		{Key: "network", Label: "Server net", Hint: "10.8.0.0/24 (server)"},
+		{Key: "proto", Label: "Proto", Kind: fieldSelect, Options: []string{"udp", "tcp", "udp4", "tcp4", "udp6", "tcp6"}},
+		{Key: "port", Label: "Port", Hint: "empty → next free from 1194"},
+		{Key: "local_bind", Label: "Local bind", Hint: "optional IP to bind"},
+		{Key: "dev_type", Label: "Dev type", Kind: fieldSelect, Options: []string{"tun", "tap"}},
+		{Key: "device", Label: "Device", Hint: "optional e.g. tun0"},
+		// server
+		{Key: "network", Label: "Server net", Hint: "empty → free 10.x.0.0/24"},
 		{Key: "topology", Label: "Topology", Kind: fieldSelect, Options: []string{"subnet", "net30", "p2p"}},
-		{Key: "remote", Label: "Remote", Hint: "vpn.example.com (client)"},
-		{Key: "public_endpoint", Label: "Public EP", Hint: "vpn.example.com:1194 for profiles"},
+		{Key: "public_endpoint", Label: "Public EP", Hint: "vpn.example.com:1194 (profiles)"},
 		{Key: "push_dns", Label: "Push DNS", Hint: "1.1.1.1,8.8.8.8"},
+		{Key: "push_routes", Label: "Push routes", Hint: "10.0.0.0/8,192.168.0.0/16"},
+		{Key: "push_domain", Label: "Push domain", Hint: "internal.lan"},
 		{Key: "redirect_gw", Label: "Redirect GW", Kind: fieldBool},
-		{Key: "pki_ca", Label: "CA path", Hint: "/var/lib/openvpnd/pki/ca.crt"},
-		{Key: "pki_cert", Label: "Cert path", Hint: "server/client cert"},
-		{Key: "pki_key", Label: "Key path", Hint: "private key"},
-		{Key: "pki_dh", Label: "DH path", Hint: "server dh.pem"},
-		{Key: "pki_tls", Label: "TLS-crypt", Hint: "optional"},
+		// client
+		{Key: "remote", Label: "Remote(s)", Hint: "host:port or host:port:proto, CSV"},
+		// crypto / auto PKI
+		{Key: "auth_mode", Label: "Auth mode", Kind: fieldSelect, Options: []string{"pki", "static_key"}},
+		{Key: "issue_cert", Label: "Issue cert", Hint: "server: auto mTLS from CA", Kind: fieldBool},
+		{Key: "create_ca", Label: "Create CA", Hint: "if no CA exists, create default", Kind: fieldBool},
+		{Key: "ca_name", Label: "CA name", Hint: "default first CA"},
+		{Key: "server_cn", Label: "Server CN", Hint: "default public EP host / name"},
+		{Key: "tls_crypt", Label: "TLS-crypt", Hint: "generate with issue", Kind: fieldBool},
+		{Key: "data_ciphers", Label: "Data ciphers", Hint: "empty → modern GCM set"},
+		{Key: "auth", Label: "Auth digest", Hint: "empty → SHA256"},
+		{Key: "cipher", Label: "Cipher", Hint: "legacy single cipher (optional)"},
+		// manual paths (override auto issue)
+		{Key: "pki_ca", Label: "CA path", Hint: "manual override"},
+		{Key: "pki_cert", Label: "Cert path", Hint: "manual override"},
+		{Key: "pki_key", Label: "Key path", Hint: "manual override"},
+		{Key: "extra", Label: "Extra conf", Hint: "raw openvpn directives"},
 	}
 }
 

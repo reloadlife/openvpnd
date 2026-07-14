@@ -149,11 +149,11 @@ func (c *Client) ListInstances(ctx context.Context) ([]Instance, error) {
 	return out, err
 }
 
-// CreateInstance creates an instance.
+// CreateInstance creates an instance (response may include auto_filled).
 func (c *Client) CreateInstance(ctx context.Context, req InstanceCreateRequest) (Instance, error) {
-	var out Instance
+	var out InstanceCreateResponse
 	err := c.do(ctx, http.MethodPost, "/v1/instances", req, &out)
-	return out, err
+	return out.Instance, err
 }
 
 // GetInstance returns one instance.

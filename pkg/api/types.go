@@ -57,9 +57,19 @@ type Remote struct {
 }
 
 // InstanceCreateRequest creates an OpenVPN instance.
+//
+// Smart defaults when fields are empty / "auto":
+//   - name → ovpn0, ovpn1, …
+//   - server_network → free 10.x.0.0/24
+//   - port → next free from 1194
+//   - proto/topology/dev_type/auth_mode → udp / subnet / tun / pki
+//   - modern data-ciphers + auth SHA256 for servers
+//   - issue_server_cert + tls-crypt when PKI paths empty and a CA exists
+//
+// Set create_ca_if_empty=true to mint CA "default" when none exists.
 type InstanceCreateRequest struct {
 	Name             string   `json:"name"`
-	Role             string   `json:"role"` // server | client
+	Role             string   `json:"role"` // server | client (default server)
 	Enabled          *bool    `json:"enabled,omitempty"`
 	BinaryName       string   `json:"binary_name,omitempty"`
 	BinaryPath       string   `json:"binary_path,omitempty"`
@@ -69,6 +79,7 @@ type InstanceCreateRequest struct {
 	LocalBind        string   `json:"local_bind,omitempty"`
 	Port             int      `json:"port,omitempty"`
 	Remotes          []Remote `json:"remotes,omitempty"`
+	Remote           string   `json:"remote,omitempty"` // shorthand host or host:port for client
 	ServerNetwork    string   `json:"server_network,omitempty"`
 	Topology         string   `json:"topology,omitempty"`
 	PoolStart        string   `json:"pool_start,omitempty"`
@@ -93,6 +104,19 @@ type InstanceCreateRequest struct {
 	PreDown          string   `json:"pre_down,omitempty"`
 	PostDown         string   `json:"post_down,omitempty"`
 	PublicEndpoint   string   `json:"public_endpoint,omitempty"` // host or host:port for client profiles
+
+	// Automation (server mTLS)
+	IssueServerCert  *bool  `json:"issue_server_cert,omitempty"`  // default true when cert paths empty + CA available
+	GenerateTLSCrypt *bool  `json:"generate_tls_crypt,omitempty"` // default true when issuing
+	CreateCAIfEmpty  bool   `json:"create_ca_if_empty,omitempty"` // create CA "default" if none
+	CAName           string `json:"ca_name,omitempty"`
+	ServerCN         string `json:"server_cn,omitempty"`
+}
+
+// InstanceCreateResponse is the created instance plus what was auto-filled.
+type InstanceCreateResponse struct {
+	Instance
+	AutoFilled []string `json:"auto_filled,omitempty"`
 }
 
 // InstanceUpdateRequest patches an instance.

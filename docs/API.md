@@ -36,6 +36,26 @@ Authentication: `Authorization: Bearer <auth.token>` on all `/v1/*` routes.
 
 `role` is `server` or `client`. `binary_name` selects a registry entry; `binary_path` overrides.
 
+### Create smart defaults / validation
+
+Empty or `auto` fields are filled:
+
+| Field | Default |
+|-------|---------|
+| `name` | `ovpn0`, `ovpn1`, … |
+| `port` | next free from 1194 |
+| `server_network` | free `10.x.0.0/24` |
+| `proto` / `topology` / `dev_type` | `udp` / `subnet` / `tun` |
+| `data_ciphers` / `auth` | modern GCM set / SHA256 |
+| `issue_server_cert` | true when cert paths empty and CA exists |
+| `generate_tls_crypt` | true when issuing |
+
+Also: `create_ca_if_empty`, `ca_name`, `server_cn`, `remote` shorthand for clients.
+
+Validated: name pattern, port range, proto, topology, network CIDR + overlap, remotes, public_endpoint, DNS IPs, absolute PKI paths, known binary names.
+
+Response includes `auto_filled: ["name=ovpn1", ...]`.
+
 ## Clients (server instances only)
 
 | Method | Path |

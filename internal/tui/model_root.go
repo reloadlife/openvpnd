@@ -401,9 +401,12 @@ func (m rootModel) openCreateForm() (tea.Model, tea.Cmd) {
 		for _, b := range m.binaries {
 			bins = append(bins, b.Name)
 		}
-		m.form = newForm("Create instance", instanceCreateFields(bins), map[string]string{
-			"port": "1194", "proto": "udp", "topology": "subnet", "network": "10.8.0.0/24", "role": "server",
+		m.form = newForm("Create instance (auto-fills empty fields)", instanceCreateFields(bins), map[string]string{
+			"role": "server", "proto": "udp", "topology": "subnet", "dev_type": "tun",
+			"auth_mode": "pki", "issue_cert": "y", "tls_crypt": "y", "create_ca": "y",
+			"push_dns": "1.1.1.1",
 		})
+		m.form.note = "Leave name/port/network empty for auto. issue_cert+create_ca → full mTLS server."
 		m.form.SetSize(m.width, m.formAreaHeight())
 		m.mode = modeInstForm
 	case tabClients:
@@ -575,24 +578,23 @@ func (m rootModel) handleClientDetailKey(key string) (tea.Model, tea.Cmd) {
 
 func (m rootModel) submitInstForm() (tea.Model, tea.Cmd) {
 	v := m.form.Values()
-	name := strings.TrimSpace(v["name"])
-	if name == "" {
-		m.form.err = "name required"
-		return m, nil
-	}
 	port, _ := parseIntField(v["port"])
+	issue := truthy(v["issue_cert"])
+	tlsCrypt := truthy(v["tls_crypt"])
 	req := pkgapi.InstanceCreateRequest{
-		Name: name, Role: v["role"], BinaryName: v["binary"], Port: port, Proto: v["proto"],
+		Name: v["name"], Role: v["role"], BinaryName: v["binary"], Port: port, Proto: v["proto"],
+		LocalBind: v["local_bind"], DevType: v["dev_type"], Device: v["device"],
 		ServerNetwork: v["network"], Topology: v["topology"], PublicEndpoint: v["public_endpoint"],
-		PushDNS: splitCSV(v["push_dns"]), RedirectGateway: truthy(v["redirect_gw"]),
+		PushDNS: splitCSV(v["push_dns"]), PushRoutes: splitCSV(v["push_routes"]), PushDomain: v["push_domain"],
+		RedirectGateway: truthy(v["redirect_gw"]),
+		AuthMode: v["auth_mode"], DataCiphers: v["data_ciphers"], AuthDigest: v["auth"], Cipher: v["cipher"],
 		PKICaPath: v["pki_ca"], PKICertPath: v["pki_cert"], PKIKeyPath: v["pki_key"],
-		PKIDHPath: v["pki_dh"], PKITLSCryptPath: v["pki_tls"],
-	}
-	if v["role"] == "client" && v["remote"] != "" {
-		req.Remotes = []pkgapi.Remote{{Host: v["remote"], Port: port}}
-		if port == 0 {
-			req.Remotes[0].Port = 1194
-		}
+		ExtraDirectives: v["extra"],
+		Remote: v["remote"],
+		CAName: v["ca_name"], ServerCN: v["server_cn"],
+		CreateCAIfEmpty: truthy(v["create_ca"]),
+		IssueServerCert:  &issue,
+		GenerateTLSCrypt: &tlsCrypt,
 	}
 	return m.startMutate(doCreateInstance(m.cfg.Client, req))
 }

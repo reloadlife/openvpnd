@@ -56,7 +56,8 @@ func TestAPIFlow(t *testing.T) {
 	router.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/v1/instances", nil))
 	require.Equal(t, http.StatusUnauthorized, rr.Code)
 
-	// create server instance
+	// create server instance (disable auto PKI — no CA in this test)
+	noIssue := false
 	body := pkgapi.InstanceCreateRequest{
 		Name:          "ovpn0",
 		Role:          "server",
@@ -64,6 +65,7 @@ func TestAPIFlow(t *testing.T) {
 		Port:          1194,
 		ServerNetwork: "10.8.0.0/24",
 		Topology:      "subnet",
+		IssueServerCert: &noIssue,
 	}
 	b, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPost, "/v1/instances", bytes.NewReader(b))
@@ -136,10 +138,12 @@ func TestProfileLink(t *testing.T) {
 	router := srv.Router()
 
 	// create server + client with PKI paths
+	noIssue := false
 	ib, _ := json.Marshal(pkgapi.InstanceCreateRequest{
 		Name: "ovpn0", Role: "server", ServerNetwork: "10.8.0.0/24",
 		PublicEndpoint: "vpn.example.com:1194",
 		PKICaPath:      ca,
+		IssueServerCert: &noIssue,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/v1/instances", bytes.NewReader(ib))
 	req.Header.Set("Authorization", "Bearer test-token")
@@ -225,9 +229,11 @@ func TestPKICreateAndIssue(t *testing.T) {
 	router.ServeHTTP(rr, req)
 	require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
 
-	// instance
+	// instance (issue via separate call below)
+	noIssue := false
 	ib, _ := json.Marshal(pkgapi.InstanceCreateRequest{
 		Name: "ovpn0", Role: "server", ServerNetwork: "10.8.0.0/24", PublicEndpoint: "vpn.example.com:1194",
+		IssueServerCert: &noIssue,
 	})
 	req = httptest.NewRequest(http.MethodPost, "/v1/instances", bytes.NewReader(ib))
 	auth(req)

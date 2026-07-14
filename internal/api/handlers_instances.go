@@ -1,14 +1,17 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/reloadlife/openvpnd/internal/confgen"
 	"github.com/reloadlife/openvpnd/internal/db"
-	"github.com/reloadlife/openvpnd/internal/netutil"
+	"github.com/reloadlife/openvpnd/internal/instance"
+	"github.com/reloadlife/openvpnd/internal/pki"
 	pkgapi "github.com/reloadlife/openvpnd/pkg/api"
 )
 
@@ -31,57 +34,204 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	if req.Name == "" {
-		writeError(w, http.StatusBadRequest, "bad_request", "name required")
+
+	ctxBuild, err := s.buildInstanceContext(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
 	}
-	role := strings.ToLower(strings.TrimSpace(req.Role))
-	if role != "server" && role != "client" {
-		writeError(w, http.StatusBadRequest, "bad_request", "role must be server or client")
+
+	in, err := createInputFromAPI(req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	if role == "server" && req.ServerNetwork != "" {
-		if err := netutil.ValidateCIDR(req.ServerNetwork); err != nil {
-			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+	// Default automation flags for servers when not specified
+	if in.Role == "server" || in.Role == "" {
+		if req.IssueServerCert != nil {
+			in.IssueServerCert = *req.IssueServerCert
+		}
+		if req.GenerateTLSCrypt != nil {
+			in.GenerateTLSCrypt = *req.GenerateTLSCrypt
+		}
+		in.CreateCAIfEmpty = req.CreateCAIfEmpty
+		// If paths empty and flags nil, Prepare will auto-issue when CA exists
+	}
+
+	prepared, err := instance.Prepare(in, ctxBuild)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "validation_error", err.Error())
+		return
+	}
+
+	out, err := s.store.CreateInstance(r.Context(), prepared.Instance)
+	if err != nil {
+		writeError(w, http.StatusConflict, "create_failed", err.Error())
+		return
+	}
+
+	// Post-create: CA + server cert + tls-crypt
+	if prepared.IssueServerCert {
+		caName := prepared.CAName
+		if prepared.CreateCAIfEmpty || caName == "" {
+			if _, err := s.store.GetCA(r.Context(), firstNonEmpty(caName, "default")); err != nil {
+				// create CA
+				name := firstNonEmpty(caName, "default")
+				mgr, err := pki.NewManager(s.cfg.OpenVPN.PKIDir)
+				if err != nil {
+					writeError(w, http.StatusInternalServerError, "pki_error", err.Error())
+					return
+				}
+				mat, err := mgr.CreateCA(pki.CreateCAOptions{
+					Name: name, CommonName: "OpenVPNd CA " + name, ValidDays: 3650,
+				})
+				if err != nil {
+					// may already exist on disk
+					if cp, kp, e2 := mgr.CAPaths(name); e2 == nil {
+						_, _ = s.store.UpsertCA(r.Context(), db.CA{
+							Name: name, CommonName: name, CertPath: cp, KeyPath: kp, SerialNext: 2,
+						})
+					} else {
+						writeError(w, http.StatusBadRequest, "pki_error", "create CA: "+err.Error())
+						return
+					}
+				} else {
+					_, _ = s.store.UpsertCA(r.Context(), db.CA{
+						Name: mat.Name, CommonName: mat.CN, CertPath: mat.CertPath, KeyPath: mat.KeyPath,
+						NotAfter: mat.NotAfter.UTC().Format(time.RFC3339), SerialNext: mat.Serial,
+					})
+					prepared.Auto = append(prepared.Auto, "created_ca="+mat.Name)
+				}
+				caName = name
+			} else {
+				caName = firstNonEmpty(caName, "default")
+			}
+		}
+		dns := []string{prepared.ServerCN}
+		issued, _, err := s.issueAndStore(r, caName, "server", prepared.ServerCN, 825, dns, nil, "", out.Name)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "pki_error", "instance created but cert issue failed: "+err.Error())
 			return
 		}
+		ca, _ := s.store.GetCA(r.Context(), caName)
+		fresh, _ := s.store.GetInstance(r.Context(), out.Name)
+		if fresh != nil && ca != nil {
+			fresh.PKICaPath = ca.CertPath
+			fresh.PKICertPath = issued.CertPath
+			fresh.PKIKeyPath = issued.KeyPath
+			if prepared.GenerateTLSCrypt {
+				mgr, _ := pki.NewManager(s.cfg.OpenVPN.PKIDir)
+				if mgr != nil {
+					if path, err := mgr.GenerateTLSCrypt(out.Name); err == nil {
+						_, _ = s.store.UpsertTLSCrypt(r.Context(), out.Name, path)
+						fresh.PKITLSCryptPath = path
+						prepared.Auto = append(prepared.Auto, "tls_crypt="+path)
+					}
+				}
+			}
+			out, _ = s.store.UpdateInstance(r.Context(), *fresh)
+		}
 	}
-	enabled := true
-	if req.Enabled != nil {
-		enabled = *req.Enabled
+
+	_ = s.store.AddEvent(r.Context(), "info", "create", out.Name, "", "instance created",
+		fmt.Sprintf(`{"auto":%q}`, strings.Join(prepared.Auto, ",")))
+	_ = s.ForceReconcile(r.Context())
+	fresh, _ := s.store.GetInstance(r.Context(), out.Name)
+	if fresh != nil {
+		out = *fresh
 	}
-	inst := db.Instance{
-		Name: req.Name, Role: role, Enabled: enabled,
+	resp := pkgapi.InstanceCreateResponse{
+		Instance:   s.toAPIInstance(out),
+		AutoFilled: prepared.Auto,
+	}
+	writeJSON(w, http.StatusCreated, resp)
+}
+
+func (s *Server) buildInstanceContext(r *http.Request) (instance.Context, error) {
+	list, err := s.store.ListInstances(r.Context())
+	if err != nil {
+		return instance.Context{}, err
+	}
+	names := map[string]struct{}{}
+	ports := map[int]struct{}{}
+	var nets []string
+	for _, i := range list {
+		names[i.Name] = struct{}{}
+		if i.Port > 0 {
+			ports[i.Port] = struct{}{}
+		}
+		if i.ServerNetwork != "" {
+			nets = append(nets, i.ServerNetwork)
+		}
+	}
+	bins, err := s.store.ListBinaries(r.Context())
+	if err != nil {
+		return instance.Context{}, err
+	}
+	binNames := map[string]struct{}{}
+	for _, b := range bins {
+		binNames[b.Name] = struct{}{}
+	}
+	// also allow config-registered binaries not yet in DB
+	for name := range s.cfg.OpenVPN.Binaries {
+		binNames[name] = struct{}{}
+	}
+	cas, _ := s.store.ListCAs(r.Context())
+	defaultCA := ""
+	if len(cas) > 0 {
+		defaultCA = cas[0].Name
+	}
+	return instance.Context{
+		ExistingNames: names,
+		UsedPorts:     ports,
+		UsedNetworks:  nets,
+		DefaultBinary: s.cfg.OpenVPN.DefaultBinary,
+		BinaryNames:   binNames,
+		HasCA:         len(cas) > 0,
+		DefaultCA:     defaultCA,
+	}, nil
+}
+
+func createInputFromAPI(req pkgapi.InstanceCreateRequest) (instance.CreateInput, error) {
+	remotes := toDBRemotes(req.Remotes)
+	if req.Remote != "" {
+		parsed, err := instance.ParseRemoteCSV(req.Remote)
+		if err != nil {
+			return instance.CreateInput{}, err
+		}
+		remotes = append(remotes, parsed...)
+	}
+	in := instance.CreateInput{
+		Name: req.Name, Role: req.Role, Enabled: req.Enabled,
 		BinaryName: req.BinaryName, BinaryPath: req.BinaryPath,
 		DevType: req.DevType, Device: req.Device, Proto: req.Proto,
-		LocalBind: req.LocalBind, Port: req.Port,
-		Remotes: toDBRemotes(req.Remotes),
+		LocalBind: req.LocalBind, Port: req.Port, Remotes: remotes,
 		ServerNetwork: req.ServerNetwork, Topology: req.Topology,
 		PoolStart: req.PoolStart, PoolEnd: req.PoolEnd,
 		AuthMode: req.AuthMode, Cipher: req.Cipher, DataCiphers: req.DataCiphers, AuthDigest: req.AuthDigest,
 		PushRoutes: req.PushRoutes, PushDNS: req.PushDNS, PushDomain: req.PushDomain,
 		RedirectGateway: req.RedirectGateway,
 		PKICaPath: req.PKICaPath, PKICertPath: req.PKICertPath, PKIKeyPath: req.PKIKeyPath,
-		PKITLSCryptPath: req.PKITLSCryptPath, PKIDHPath: req.PKIDHPath, StaticKeyPath: req.StaticKeyPath,
+		PKITLSCrypt: req.PKITLSCryptPath, PKIDHPath: req.PKIDHPath, StaticKeyPath: req.StaticKeyPath,
 		ExtraDirectives: req.ExtraDirectives,
 		PreUp: req.PreUp, PostUp: req.PostUp, PreDown: req.PreDown, PostDown: req.PostDown,
 		PublicEndpoint: req.PublicEndpoint,
+		CAName: req.CAName, ServerCN: req.ServerCN, CreateCAIfEmpty: req.CreateCAIfEmpty,
 	}
-	if inst.BinaryName == "" {
-		inst.BinaryName = s.cfg.OpenVPN.DefaultBinary
+	if req.IssueServerCert != nil {
+		in.IssueServerCert = *req.IssueServerCert
 	}
-	out, err := s.store.CreateInstance(r.Context(), inst)
-	if err != nil {
-		writeError(w, http.StatusConflict, "create_failed", err.Error())
-		return
+	if req.GenerateTLSCrypt != nil {
+		in.GenerateTLSCrypt = *req.GenerateTLSCrypt
 	}
-	_ = s.store.AddEvent(r.Context(), "info", "create", out.Name, "", "instance created", "{}")
-	_ = s.ForceReconcile(r.Context())
-	fresh, _ := s.store.GetInstance(r.Context(), out.Name)
-	if fresh != nil {
-		out = *fresh
+	return in, nil
+}
+
+func firstNonEmpty(a, b string) string {
+	if strings.TrimSpace(a) != "" {
+		return a
 	}
-	writeJSON(w, http.StatusCreated, s.toAPIInstance(out))
+	return b
 }
 
 func (s *Server) handleGetInstance(w http.ResponseWriter, r *http.Request) {
@@ -269,9 +419,7 @@ func (s *Server) handleInstanceRestart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", err.Error())
 		return
 	}
-	// force conf hash change via temporary extra space strip is fragile; stop then start
 	_ = s.backend.StopInstance(r.Context(), name)
-	// clear conf hash so Ensure restarts
 	inst.ConfHash = ""
 	_, _ = s.store.UpdateInstance(r.Context(), *inst)
 	_ = s.store.SetInstanceEnabled(r.Context(), name, true)
