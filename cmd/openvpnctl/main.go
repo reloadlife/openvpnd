@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/reloadlife/openvpnd/internal/config"
+	"github.com/reloadlife/openvpnd/internal/tui"
 	"github.com/reloadlife/openvpnd/internal/version"
 	pkgapi "github.com/reloadlife/openvpnd/pkg/api"
 )
@@ -19,16 +20,22 @@ func main() {
 	var configPath string
 	root := &cobra.Command{
 		Use:   "openvpnctl",
-		Short: "OpenVPN control CLI for openvpnd",
+		Short: "OpenVPN control panel (TUI + CLI)",
+		Long:  "Full-screen TUI by default. Subcommands for scripting.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runTUI(configPath)
+		},
 	}
 	root.PersistentFlags().StringVar(&configPath, "config", "", "path to config file")
 	root.AddCommand(
 		versionCmd(),
+		tuiCmd(&configPath),
 		instanceCmd(&configPath),
 		clientCmd(&configPath),
 		binaryCmd(&configPath),
 		statsCmd(&configPath),
 		reconcileCmd(&configPath),
+		eventsCmd(&configPath),
 	)
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
@@ -43,6 +50,28 @@ func versionCmd() *cobra.Command {
 			fmt.Println(version.String())
 		},
 	}
+}
+
+func tuiCmd(configPath *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "tui",
+		Short: "Open full-screen TUI",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runTUI(*configPath)
+		},
+	}
+}
+
+func runTUI(configPath string) error {
+	cfg, client, err := loadClient(configPath)
+	if err != nil {
+		return err
+	}
+	return tui.Run(tui.Config{
+		Client:          client,
+		Endpoint:        cfg.Endpoint(),
+		RefreshInterval: cfg.Refresh(),
+	})
 }
 
 func loadClient(configPath string) (*config.CtlConfig, *pkgapi.Client, error) {
@@ -357,6 +386,24 @@ func reconcileCmd(configPath *string) *cobra.Command {
 				return err
 			}
 			return c.Reconcile(context.Background())
+		},
+	}
+}
+
+func eventsCmd(configPath *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "events",
+		Short: "List recent events",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, c, err := loadClient(*configPath)
+			if err != nil {
+				return err
+			}
+			list, err := c.ListEvents(context.Background())
+			if err != nil {
+				return err
+			}
+			return printJSON(list)
 		},
 	}
 }

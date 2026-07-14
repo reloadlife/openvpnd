@@ -2,7 +2,7 @@
 
 **openvpnd** is a Linux daemon that manages OpenVPN **server and client** instances with a REST API, SQLite desired-state store, process reconciler, multi-binary registry, and Prometheus metrics.
 
-**openvpnctl** is the control CLI.
+**openvpnctl** is the control panel: **full-screen TUI** (default) plus CLI subcommands.
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%203.0-blue.svg)](LICENSE)
 
@@ -88,6 +88,22 @@ export OPENVPNCTL_TOKEN=dev-token
 ./bin/openvpnctl instance create ovpn0 --role server --network 10.8.0.0/24 --binary default
 ./bin/openvpnctl client create ovpn0 alice --name Alice
 ./bin/openvpnctl instance list
+./bin/openvpnctl   # full-screen TUI
+```
+
+### TUI keys (summary)
+
+| Key | Action |
+|-----|--------|
+| `1`–`5` / Tab | Instances · Clients · Binaries · Stats · Events |
+| `n` | Create (context-aware form) |
+| `enter` | Detail view |
+| `u` / `d` | Instance up / down |
+| `s` / `S` | Suspend / resume client |
+| `p` / `L` | Mint profile link + QR |
+| `c` | Show `.ovpn` |
+| `R` | Force reconcile |
+| `q` | Quit |
 ```
 
 ## Multi-binary

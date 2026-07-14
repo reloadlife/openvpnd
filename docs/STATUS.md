@@ -16,6 +16,7 @@ openvpnd is under active development. This document tracks what works today vs p
 - [x] Client `.ovpn` export (inline PEMs from paths)
 - [x] Presigned profile links + `openvpn://import-profile/` deep links
 - [x] Example configs, systemd unit, docs
+- [x] Full-screen TUI (`openvpnctl` / `openvpnctl tui`) — instances, clients, binaries, stats, events, forms, profile link + QR
 
 ## Not 1:1 with OpenVPN
 
@@ -32,7 +33,7 @@ OpenVPN has hundreds of options. First-class coverage is intentional and incompl
 | `auth-user-pass` / plugins / LDAP | Not started |
 | Full management API surface | Partial |
 | Bandwidth enforcement (tc/nft) | Fields only |
-| TUI | Not started |
+| TUI | Done (foundation screens) |
 | Self-update from releases | Not started |
 | QR codes for profile URLs | Planned |
 

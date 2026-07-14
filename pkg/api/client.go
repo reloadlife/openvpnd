@@ -168,6 +168,13 @@ func (c *Client) DeleteInstance(ctx context.Context, name string) error {
 	return c.do(ctx, http.MethodDelete, "/v1/instances/"+name, nil, nil)
 }
 
+// UpdateInstance patches an instance.
+func (c *Client) UpdateInstance(ctx context.Context, name string, req InstanceUpdateRequest) (Instance, error) {
+	var out Instance
+	err := c.do(ctx, http.MethodPatch, "/v1/instances/"+name, req, &out)
+	return out, err
+}
+
 // InstanceUp enables and starts an instance.
 func (c *Client) InstanceUp(ctx context.Context, name string) error {
 	return c.do(ctx, http.MethodPost, "/v1/instances/"+name+"/up", nil, nil)
@@ -176,6 +183,39 @@ func (c *Client) InstanceUp(ctx context.Context, name string) error {
 // InstanceDown disables and stops an instance.
 func (c *Client) InstanceDown(ctx context.Context, name string) error {
 	return c.do(ctx, http.MethodPost, "/v1/instances/"+name+"/down", nil, nil)
+}
+
+// InstanceRestart restarts an instance process.
+func (c *Client) InstanceRestart(ctx context.Context, name string) error {
+	return c.do(ctx, http.MethodPost, "/v1/instances/"+name+"/restart", nil, nil)
+}
+
+// ExportInstance returns rendered conf text.
+func (c *Client) ExportInstance(ctx context.Context, name string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/instances/"+name+"/export", nil)
+	if err != nil {
+		return "", err
+	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode >= 400 {
+		var eb ErrorBody
+		if json.Unmarshal(data, &eb) == nil && eb.Error.Message != "" {
+			return "", &APIError{Status: resp.StatusCode, Code: eb.Error.Code, Message: eb.Error.Message}
+		}
+		return "", &APIError{Status: resp.StatusCode, Message: string(data)}
+	}
+	return string(data), nil
 }
 
 // ListClients lists clients on a server instance.
@@ -195,6 +235,55 @@ func (c *Client) CreateClient(ctx context.Context, instance string, req ClientCr
 // DeleteClient deletes a client.
 func (c *Client) DeleteClient(ctx context.Context, instance, cn string) error {
 	return c.do(ctx, http.MethodDelete, "/v1/instances/"+instance+"/clients/"+cn, nil, nil)
+}
+
+// UpdateClient patches a client.
+func (c *Client) UpdateClient(ctx context.Context, instance, cn string, req ClientUpdateRequest) (ServerClient, error) {
+	var out ServerClient
+	err := c.do(ctx, http.MethodPatch, "/v1/instances/"+instance+"/clients/"+cn, req, &out)
+	return out, err
+}
+
+// SuspendClient suspends a server client.
+func (c *Client) SuspendClient(ctx context.Context, instance, cn string) error {
+	return c.do(ctx, http.MethodPost, "/v1/instances/"+instance+"/clients/"+cn+"/suspend", nil, nil)
+}
+
+// ResumeClient resumes a server client.
+func (c *Client) ResumeClient(ctx context.Context, instance, cn string) error {
+	return c.do(ctx, http.MethodPost, "/v1/instances/"+instance+"/clients/"+cn+"/resume", nil, nil)
+}
+
+// ResetClientTraffic soft-resets traffic counters.
+func (c *Client) ResetClientTraffic(ctx context.Context, instance, cn string) error {
+	return c.do(ctx, http.MethodPost, "/v1/instances/"+instance+"/clients/"+cn+"/reset-traffic", nil, nil)
+}
+
+// ListAllClients loads clients for every instance (servers only; client roles return empty).
+func (c *Client) ListAllClients(ctx context.Context) ([]ServerClient, error) {
+	insts, err := c.ListInstances(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []ServerClient
+	for _, inst := range insts {
+		if inst.Role != "server" {
+			continue
+		}
+		list, err := c.ListClients(ctx, inst.Name)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, list...)
+	}
+	return out, nil
+}
+
+// ListEvents returns recent audit events.
+func (c *Client) ListEvents(ctx context.Context) ([]Event, error) {
+	var out []Event
+	err := c.do(ctx, http.MethodGet, "/v1/events", nil, &out)
+	return out, err
 }
 
 // CreateProfileLink mints a presigned .ovpn download / OpenVPN Connect import URL.
