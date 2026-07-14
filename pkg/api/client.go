@@ -412,3 +412,22 @@ func (c *Client) IssueServerCert(ctx context.Context, instance string, req Issue
 func (c *Client) IssueClientCert(ctx context.Context, instance, cn string, req IssueClientCertRequest) error {
 	return c.do(ctx, http.MethodPost, "/v1/instances/"+instance+"/clients/"+cn+"/issue-cert", req, nil)
 }
+
+// ListFeatures returns builtin + custom feature presets.
+func (c *Client) ListFeatures(ctx context.Context) ([]FeaturePreset, error) {
+	var out []FeaturePreset
+	err := c.do(ctx, http.MethodGet, "/v1/features", nil, &out)
+	return out, err
+}
+
+// UpsertFeature creates or updates a custom feature preset.
+func (c *Client) UpsertFeature(ctx context.Context, p FeaturePreset) (FeaturePreset, error) {
+	var out FeaturePreset
+	err := c.do(ctx, http.MethodPost, "/v1/features", p, &out)
+	return out, err
+}
+
+// DeleteFeature removes a custom preset.
+func (c *Client) DeleteFeature(ctx context.Context, id string) error {
+	return c.do(ctx, http.MethodDelete, "/v1/features/"+id, nil, nil)
+}

@@ -590,11 +590,20 @@ func (m rootModel) submitInstForm() (tea.Model, tea.Cmd) {
 		AuthMode: v["auth_mode"], DataCiphers: v["data_ciphers"], AuthDigest: v["auth"], Cipher: v["cipher"],
 		PKICaPath: v["pki_ca"], PKICertPath: v["pki_cert"], PKIKeyPath: v["pki_key"],
 		ExtraDirectives: v["extra"],
+		FeatureSets: splitCSV(v["features"]),
 		Remote: v["remote"],
 		CAName: v["ca_name"], ServerCN: v["server_cn"],
 		CreateCAIfEmpty: truthy(v["create_ca"]),
 		IssueServerCert:  &issue,
 		GenerateTLSCrypt: &tlsCrypt,
+	}
+	if pl := strings.TrimSpace(v["plugin"]); pl != "" {
+		parts := strings.Fields(pl)
+		p := pkgapi.Plugin{Path: parts[0]}
+		if len(parts) > 1 {
+			p.Args = parts[1:]
+		}
+		req.Plugins = []pkgapi.Plugin{p}
 	}
 	return m.startMutate(doCreateInstance(m.cfg.Client, req))
 }

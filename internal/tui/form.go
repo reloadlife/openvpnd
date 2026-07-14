@@ -306,7 +306,10 @@ func instanceCreateFields(binaries []string) []fieldDef {
 		{Key: "pki_ca", Label: "CA path", Hint: "manual override"},
 		{Key: "pki_cert", Label: "Cert path", Hint: "manual override"},
 		{Key: "pki_key", Label: "Key path", Hint: "manual override"},
-		{Key: "extra", Label: "Extra conf", Hint: "raw openvpn directives"},
+		// extensions / custom openvpn
+		{Key: "features", Label: "Features", Hint: "CSV: udp_stuffing,mssfix,explicit_exit_notify,…"},
+		{Key: "plugin", Label: "Plugin", Hint: "absolute path to .so (optional args after space)"},
+		{Key: "extra", Label: "Extra conf", Hint: "raw openvpn directives (fork options)"},
 	}
 }
 

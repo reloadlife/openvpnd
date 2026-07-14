@@ -44,6 +44,7 @@ Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 | [docs/STATUS.md](docs/STATUS.md) | What works / roadmap / gaps |
 | [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) | Prometheus + SNMP |
 | [docs/PKI.md](docs/PKI.md) | CA / mTLS certs |
+| [docs/EXTENSIONS.md](docs/EXTENSIONS.md) | Plugins, custom builds, feature sets |
 | [SECURITY.md](SECURITY.md) | Reporting + hardening |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Dev workflow |
 

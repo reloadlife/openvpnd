@@ -99,6 +99,10 @@ type InstanceCreateRequest struct {
 	PKIDHPath        string   `json:"pki_dh_path,omitempty"`
 	StaticKeyPath    string   `json:"static_key_path,omitempty"`
 	ExtraDirectives  string   `json:"extra_directives,omitempty"`
+	// Extensions: custom OpenVPN builds / plugins (UDP stuffing, etc.)
+	Plugins     []Plugin  `json:"plugins,omitempty"`
+	EnvVars     []EnvVar  `json:"env_vars,omitempty"`
+	FeatureSets []string  `json:"feature_sets,omitempty"`
 	PreUp            string   `json:"pre_up,omitempty"`
 	PostUp           string   `json:"post_up,omitempty"`
 	PreDown          string   `json:"pre_down,omitempty"`
@@ -111,6 +115,29 @@ type InstanceCreateRequest struct {
 	CreateCAIfEmpty  bool   `json:"create_ca_if_empty,omitempty"` // create CA "default" if none
 	CAName           string `json:"ca_name,omitempty"`
 	ServerCN         string `json:"server_cn,omitempty"`
+}
+
+// Plugin is --plugin path + args.
+type Plugin struct {
+	Path string   `json:"path"`
+	Args []string `json:"args,omitempty"`
+}
+
+// EnvVar is process environment for openvpn.
+type EnvVar struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// FeaturePreset is a reusable extension bundle.
+type FeaturePreset struct {
+	ID              string   `json:"id"`
+	Description     string   `json:"description,omitempty"`
+	ExtraDirectives string   `json:"extra_directives,omitempty"`
+	Plugins         []Plugin `json:"plugins,omitempty"`
+	EnvVars         []EnvVar `json:"env_vars,omitempty"`
+	Notes           string   `json:"notes,omitempty"`
+	Builtin         bool     `json:"builtin"`
 }
 
 // InstanceCreateResponse is the created instance plus what was auto-filled.
@@ -149,6 +176,9 @@ type InstanceUpdateRequest struct {
 	PKIDHPath        *string  `json:"pki_dh_path,omitempty"`
 	StaticKeyPath    *string  `json:"static_key_path,omitempty"`
 	ExtraDirectives  *string  `json:"extra_directives,omitempty"`
+	Plugins          []Plugin `json:"plugins,omitempty"`
+	EnvVars          []EnvVar `json:"env_vars,omitempty"`
+	FeatureSets      []string `json:"feature_sets,omitempty"`
 	PreUp            *string  `json:"pre_up,omitempty"`
 	PostUp           *string  `json:"post_up,omitempty"`
 	PreDown          *string  `json:"pre_down,omitempty"`
@@ -190,6 +220,9 @@ type Instance struct {
 	PKIDHPath        string    `json:"pki_dh_path,omitempty"`
 	StaticKeyPath    string    `json:"static_key_path,omitempty"`
 	ExtraDirectives  string    `json:"extra_directives,omitempty"`
+	Plugins          []Plugin  `json:"plugins,omitempty"`
+	EnvVars          []EnvVar  `json:"env_vars,omitempty"`
+	FeatureSets      []string  `json:"feature_sets,omitempty"`
 	PreUp            string    `json:"pre_up,omitempty"`
 	PostUp           string    `json:"post_up,omitempty"`
 	PreDown          string    `json:"pre_down,omitempty"`

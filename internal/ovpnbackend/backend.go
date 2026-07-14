@@ -31,23 +31,25 @@ type LiveClient struct {
 
 // DesiredInstance is conf + process intent for the backend.
 type DesiredInstance struct {
-	Name           string
-	Role           string
-	Enabled        bool
-	BinaryPath     string
-	ConfPath       string
-	ConfContent    string
-	ConfHash       string
-	PIDPath        string
-	MgmtPath       string
-	StatusPath     string
-	CCDDir         string
-	CCDFiles       map[string]string // filename -> content
-	PreUp          string
-	PostUp         string
-	PreDown        string
-	PostDown       string
-	AllowHooks     bool
+	Name        string
+	Role        string
+	Enabled     bool
+	BinaryPath  string
+	ConfPath    string
+	ConfContent string
+	ConfHash    string
+	PIDPath     string
+	MgmtPath    string
+	StatusPath  string
+	CCDDir      string
+	CCDFiles    map[string]string // filename -> content
+	// Env is extra environment for the openvpn process (NAME=value).
+	Env        []string
+	PreUp      string
+	PostUp     string
+	PreDown    string
+	PostDown   string
+	AllowHooks bool
 }
 
 // MgmtClient talks to openvpn management interface.

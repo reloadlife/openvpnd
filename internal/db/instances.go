@@ -15,6 +15,7 @@ cipher, data_ciphers, auth_digest,
 push_routes, push_dns, push_domain, redirect_gateway,
 pki_ca_path, pki_cert_path, pki_key_path, pki_tls_crypt_path, pki_dh_path,
 static_key_path, extra_directives,
+plugins, env_vars, feature_sets,
 pre_up, post_up, pre_down, post_down,
 conf_hash, pid, last_error,
 last_rx_bytes, last_tx_bytes, last_rx_bps, last_tx_bps, connected_clients,
@@ -27,6 +28,7 @@ func scanInstance(scanner interface {
 	var i Instance
 	var enabled, redirect int
 	var remotes, pushRoutes, pushDNS string
+	var plugins, envVars, featureSets string
 	var created, updated string
 	err := scanner.Scan(
 		&i.ID, &i.Name, &i.Role, &enabled, &i.BinaryName, &i.BinaryPath,
@@ -36,6 +38,7 @@ func scanInstance(scanner interface {
 		&pushRoutes, &pushDNS, &i.PushDomain, &redirect,
 		&i.PKICaPath, &i.PKICertPath, &i.PKIKeyPath, &i.PKITLSCryptPath, &i.PKIDHPath,
 		&i.StaticKeyPath, &i.ExtraDirectives,
+		&plugins, &envVars, &featureSets,
 		&i.PreUp, &i.PostUp, &i.PreDown, &i.PostDown,
 		&i.ConfHash, &i.PID, &i.LastError,
 		&i.LastRxBytes, &i.LastTxBytes, &i.LastRxBps, &i.LastTxBps, &i.ConnectedClients,
@@ -50,6 +53,9 @@ func scanInstance(scanner interface {
 	i.Remotes = decodeRemotes(remotes)
 	i.PushRoutes = decodeJSONList(pushRoutes)
 	i.PushDNS = decodeJSONList(pushDNS)
+	i.Plugins = decodePlugins(plugins)
+	i.EnvVars = decodeEnvVars(envVars)
+	i.FeatureSets = decodeJSONList(featureSets)
 	i.CreatedAt = parseTime(created)
 	i.UpdatedAt = parseTime(updated)
 	return i, nil
@@ -93,6 +99,7 @@ INSERT INTO instances (
   push_routes, push_dns, push_domain, redirect_gateway,
   pki_ca_path, pki_cert_path, pki_key_path, pki_tls_crypt_path, pki_dh_path,
   static_key_path, extra_directives,
+  plugins, env_vars, feature_sets,
   pre_up, post_up, pre_down, post_down,
   conf_hash, pid, last_error,
   last_rx_bytes, last_tx_bytes, last_rx_bps, last_tx_bps, connected_clients,
@@ -100,7 +107,7 @@ INSERT INTO instances (
   created_at, updated_at
 ) VALUES (
   ?,?,?,?,?, ?,?,?,?,?,?, ?,?,?,?,?, ?,?,?, ?,?,?,?,
-  ?,?,?,?,?, ?,?, ?,?,?,?,
+  ?,?,?,?,?, ?,?, ?,?,?, ?,?,?,?,
   '', 0, '', 0,0,0,0,0, ?, ?,?
 )`,
 		i.Name, i.Role, boolToInt(i.Enabled), i.BinaryName, i.BinaryPath,
@@ -110,6 +117,7 @@ INSERT INTO instances (
 		encodeJSONList(i.PushRoutes), encodeJSONList(i.PushDNS), i.PushDomain, boolToInt(i.RedirectGateway),
 		i.PKICaPath, i.PKICertPath, i.PKIKeyPath, i.PKITLSCryptPath, i.PKIDHPath,
 		i.StaticKeyPath, i.ExtraDirectives,
+		encodePlugins(i.Plugins), encodeEnvVars(i.EnvVars), encodeJSONList(i.FeatureSets),
 		i.PreUp, i.PostUp, i.PreDown, i.PostDown,
 		i.PublicEndpoint,
 		now, now,
@@ -189,6 +197,7 @@ UPDATE instances SET
   push_routes=?, push_dns=?, push_domain=?, redirect_gateway=?,
   pki_ca_path=?, pki_cert_path=?, pki_key_path=?, pki_tls_crypt_path=?, pki_dh_path=?,
   static_key_path=?, extra_directives=?,
+  plugins=?, env_vars=?, feature_sets=?,
   pre_up=?, post_up=?, pre_down=?, post_down=?,
   conf_hash=?, public_endpoint=?, updated_at=?
 WHERE name=?`,
@@ -199,6 +208,7 @@ WHERE name=?`,
 		encodeJSONList(i.PushRoutes), encodeJSONList(i.PushDNS), i.PushDomain, boolToInt(i.RedirectGateway),
 		i.PKICaPath, i.PKICertPath, i.PKIKeyPath, i.PKITLSCryptPath, i.PKIDHPath,
 		i.StaticKeyPath, i.ExtraDirectives,
+		encodePlugins(i.Plugins), encodeEnvVars(i.EnvVars), encodeJSONList(i.FeatureSets),
 		i.PreUp, i.PostUp, i.PreDown, i.PostDown,
 		i.ConfHash, i.PublicEndpoint, now, i.Name,
 	)

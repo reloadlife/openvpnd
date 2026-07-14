@@ -19,6 +19,32 @@ type Remote struct {
 	Proto string `json:"proto,omitempty"`
 }
 
+// Plugin is an OpenVPN --plugin module (path + args).
+// Used for custom features (e.g. UDP stuffing plugin with a forked binary).
+type Plugin struct {
+	Path string   `json:"path"`
+	Args []string `json:"args,omitempty"`
+}
+
+// EnvVar is injected into the openvpn process environment.
+type EnvVar struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// FeaturePreset is a reusable extension bundle (plugins + directives + env).
+type FeaturePreset struct {
+	ID              string    `json:"id"`
+	Description     string    `json:"description,omitempty"`
+	ExtraDirectives string    `json:"extra_directives,omitempty"`
+	Plugins         []Plugin  `json:"plugins,omitempty"`
+	EnvVars         []EnvVar  `json:"env_vars,omitempty"`
+	Notes           string    `json:"notes,omitempty"`
+	Builtin         bool      `json:"builtin"`
+	CreatedAt       time.Time `json:"created_at,omitempty"`
+	UpdatedAt       time.Time `json:"updated_at,omitempty"`
+}
+
 // Instance is the desired OpenVPN process configuration.
 type Instance struct {
 	ID               int64     `json:"id"`
@@ -52,6 +78,10 @@ type Instance struct {
 	PKIDHPath        string    `json:"pki_dh_path,omitempty"`
 	StaticKeyPath    string    `json:"static_key_path,omitempty"`
 	ExtraDirectives  string    `json:"extra_directives,omitempty"`
+	// Extensions for custom OpenVPN builds / plugins (UDP stuffing, etc.)
+	Plugins     []Plugin  `json:"plugins,omitempty"`
+	EnvVars     []EnvVar  `json:"env_vars,omitempty"`
+	FeatureSets []string  `json:"feature_sets,omitempty"` // preset IDs
 	PreUp            string    `json:"pre_up,omitempty"`
 	PostUp           string    `json:"post_up,omitempty"`
 	PreDown          string    `json:"pre_down,omitempty"`

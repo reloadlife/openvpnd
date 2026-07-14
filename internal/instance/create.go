@@ -13,6 +13,8 @@ import (
 	"github.com/reloadlife/openvpnd/internal/netutil"
 )
 
+// ensure filepath used (plugins abs path)
+
 var nameRe = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]{0,31}$`)
 
 // CreateInput is normalized create intent (from API/TUI/CLI).
@@ -47,6 +49,9 @@ type CreateInput struct {
 	PKIDHPath       string
 	StaticKeyPath   string
 	ExtraDirectives string
+	Plugins         []db.Plugin
+	EnvVars         []db.EnvVar
+	FeatureSets     []string
 	PreUp           string
 	PostUp          string
 	PreDown         string
@@ -357,8 +362,24 @@ func Prepare(in CreateInput, ctx Context) (Result, error) {
 		PKIKeyPath: pClean(in.PKIKeyPath), PKITLSCryptPath: pClean(in.PKITLSCrypt),
 		PKIDHPath: pClean(in.PKIDHPath), StaticKeyPath: pClean(in.StaticKeyPath),
 		ExtraDirectives: in.ExtraDirectives,
+		Plugins: in.Plugins, EnvVars: in.EnvVars, FeatureSets: cleanList(in.FeatureSets),
 		PreUp: in.PreUp, PostUp: in.PostUp, PreDown: in.PreDown, PostDown: in.PostDown,
 		PublicEndpoint: publicEP,
+	}
+
+	// Validate plugins
+	for i, pl := range inst.Plugins {
+		if pl.Path == "" {
+			return Result{}, fmt.Errorf("plugins[%d]: path required", i)
+		}
+		if !filepath.IsAbs(pl.Path) {
+			return Result{}, fmt.Errorf("plugins[%d]: path must be absolute", i)
+		}
+	}
+	for i, e := range inst.EnvVars {
+		if e.Name == "" || strings.ContainsAny(e.Name, "=\x00") {
+			return Result{}, fmt.Errorf("env_vars[%d]: invalid name", i)
+		}
 	}
 
 	return Result{

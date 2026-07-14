@@ -186,6 +186,9 @@ func (b *HostBackend) EnsureInstance(ctx context.Context, d DesiredInstance) err
 		_ = os.Remove(d.MgmtPath)
 		cmd := exec.CommandContext(ctx, d.BinaryPath, "--config", d.ConfPath)
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if len(d.Env) > 0 {
+			cmd.Env = append(os.Environ(), d.Env...)
+		}
 		// capture logs to runtime dir
 		logPath := filepath.Join(filepath.Dir(d.PIDPath), d.Name+".log")
 		logF, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)

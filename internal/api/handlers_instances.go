@@ -214,6 +214,7 @@ func createInputFromAPI(req pkgapi.InstanceCreateRequest) (instance.CreateInput,
 		PKICaPath: req.PKICaPath, PKICertPath: req.PKICertPath, PKIKeyPath: req.PKIKeyPath,
 		PKITLSCrypt: req.PKITLSCryptPath, PKIDHPath: req.PKIDHPath, StaticKeyPath: req.StaticKeyPath,
 		ExtraDirectives: req.ExtraDirectives,
+		Plugins: toDBPlugins(req.Plugins), EnvVars: toDBEnv(req.EnvVars), FeatureSets: req.FeatureSets,
 		PreUp: req.PreUp, PostUp: req.PostUp, PreDown: req.PreDown, PostDown: req.PostDown,
 		PublicEndpoint: req.PublicEndpoint,
 		CAName: req.CAName, ServerCN: req.ServerCN, CreateCAIfEmpty: req.CreateCAIfEmpty,
@@ -341,6 +342,15 @@ func (s *Server) handleUpdateInstance(w http.ResponseWriter, r *http.Request) {
 	if req.ExtraDirectives != nil {
 		inst.ExtraDirectives = *req.ExtraDirectives
 	}
+	if req.Plugins != nil {
+		inst.Plugins = toDBPlugins(req.Plugins)
+	}
+	if req.EnvVars != nil {
+		inst.EnvVars = toDBEnv(req.EnvVars)
+	}
+	if req.FeatureSets != nil {
+		inst.FeatureSets = req.FeatureSets
+	}
 	if req.PreUp != nil {
 		inst.PreUp = *req.PreUp
 	}
@@ -448,7 +458,8 @@ func (s *Server) handleInstanceExport(w http.ResponseWriter, r *http.Request) {
 		RuntimeDir: s.cfg.OpenVPN.RuntimeDir,
 		Name:       name,
 	}
-	res, err := confgen.RenderInstance(*inst, paths, clients)
+	customPresets, _ := s.store.ListFeaturePresets(r.Context())
+	res, err := confgen.RenderInstanceOpts(*inst, paths, clients, confgen.RenderOptions{CustomPresets: customPresets})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "render_failed", err.Error())
 		return
@@ -479,6 +490,7 @@ func (s *Server) toAPIInstance(i db.Instance) pkgapi.Instance {
 		PKICaPath: i.PKICaPath, PKICertPath: i.PKICertPath, PKIKeyPath: i.PKIKeyPath,
 		PKITLSCryptPath: i.PKITLSCryptPath, PKIDHPath: i.PKIDHPath, StaticKeyPath: i.StaticKeyPath,
 		ExtraDirectives: i.ExtraDirectives,
+		Plugins: toAPIPlugins(i.Plugins), EnvVars: toAPIEnv(i.EnvVars), FeatureSets: i.FeatureSets,
 		PreUp: i.PreUp, PostUp: i.PostUp, PreDown: i.PreDown, PostDown: i.PostDown,
 		PublicEndpoint: i.PublicEndpoint,
 		PID: i.PID, LastError: i.LastError, ConnectedClients: i.ConnectedClients,
@@ -505,6 +517,50 @@ func toAPIRemotes(in []db.Remote) []pkgapi.Remote {
 	out := make([]pkgapi.Remote, 0, len(in))
 	for _, r := range in {
 		out = append(out, pkgapi.Remote{Host: r.Host, Port: r.Port, Proto: r.Proto})
+	}
+	return out
+}
+
+func toDBPlugins(in []pkgapi.Plugin) []db.Plugin {
+	if in == nil {
+		return nil
+	}
+	out := make([]db.Plugin, 0, len(in))
+	for _, p := range in {
+		out = append(out, db.Plugin{Path: p.Path, Args: p.Args})
+	}
+	return out
+}
+
+func toAPIPlugins(in []db.Plugin) []pkgapi.Plugin {
+	if in == nil {
+		return nil
+	}
+	out := make([]pkgapi.Plugin, 0, len(in))
+	for _, p := range in {
+		out = append(out, pkgapi.Plugin{Path: p.Path, Args: p.Args})
+	}
+	return out
+}
+
+func toDBEnv(in []pkgapi.EnvVar) []db.EnvVar {
+	if in == nil {
+		return nil
+	}
+	out := make([]db.EnvVar, 0, len(in))
+	for _, e := range in {
+		out = append(out, db.EnvVar{Name: e.Name, Value: e.Value})
+	}
+	return out
+}
+
+func toAPIEnv(in []db.EnvVar) []pkgapi.EnvVar {
+	if in == nil {
+		return nil
+	}
+	out := make([]pkgapi.EnvVar, 0, len(in))
+	for _, e := range in {
+		out = append(out, pkgapi.EnvVar{Name: e.Name, Value: e.Value})
 	}
 	return out
 }

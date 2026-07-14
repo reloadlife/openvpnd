@@ -115,6 +115,11 @@ func (s *Server) Router() http.Handler {
 		r.Get("/pki/tls-crypt", s.handleListTLSCrypt)
 		r.Post("/pki/tls-crypt", s.handleGenerateTLSCrypt)
 
+		// Extensions / custom OpenVPN features
+		r.Get("/features", s.handleListFeaturePresets)
+		r.Post("/features", s.handleUpsertFeaturePreset)
+		r.Delete("/features/{id}", s.handleDeleteFeaturePreset)
+
 		r.Delete("/profile-tokens/{token}", s.handleRevokeProfileLink)
 	})
 	return r

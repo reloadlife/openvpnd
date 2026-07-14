@@ -104,3 +104,24 @@ Requirements to generate a profile:
 3. Client `client_cert_path` + `client_key_path`
 
 Set `public_base_url` in daemon config so links use your public HTTPS origin (not localhost).
+
+## Extensions (custom OpenVPN features)
+
+For forks/plugins (e.g. UDP stuffing), multi-binary registry, and named feature sets:
+
+| Method | Path | Notes |
+|--------|------|--------|
+| GET/POST | `/v1/features` | List builtin+custom / upsert custom preset |
+| DELETE | `/v1/features/{id}` | Delete custom preset (not pure builtins) |
+
+Instance create/update fields:
+
+| Field | Purpose |
+|-------|---------|
+| `binary_name` / `binary_path` | Pin a registered or absolute OpenVPN build |
+| `plugins` | `[{"path":"/opt/p.so","args":["a=1"]}]` → `--plugin` |
+| `env_vars` | Process env for the openvpn child |
+| `feature_sets` | Preset IDs expanded into plugins/env/extra |
+| `extra_directives` | Raw conf lines escape hatch |
+
+See [EXTENSIONS.md](EXTENSIONS.md).

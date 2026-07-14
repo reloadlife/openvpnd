@@ -10,6 +10,7 @@ import (
 
 	"github.com/reloadlife/openvpnd/internal/confgen"
 	"github.com/reloadlife/openvpnd/internal/db"
+	"github.com/reloadlife/openvpnd/internal/features"
 	"github.com/reloadlife/openvpnd/internal/ovpnbackend"
 	"github.com/reloadlife/openvpnd/internal/stats"
 )
@@ -184,7 +185,8 @@ func (r *Reconciler) applyInstance(ctx context.Context, inst db.Instance) error 
 		RuntimeDir: r.cfg.RuntimeDir,
 		Name:       inst.Name,
 	}
-	rendered, err := confgen.RenderInstance(inst, paths, clients)
+	customPresets, _ := r.store.ListFeaturePresets(ctx)
+	rendered, err := confgen.RenderInstanceOpts(inst, paths, clients, confgen.RenderOptions{CustomPresets: customPresets})
 	if err != nil {
 		return fmt.Errorf("render conf: %w", err)
 	}
@@ -194,6 +196,15 @@ func (r *Reconciler) applyInstance(ctx context.Context, inst db.Instance) error 
 		for _, c := range clients {
 			fn := confgen.SafeCNFilename(c.CommonName)
 			ccdFiles[fn] = confgen.RenderCCD(c, inst.ServerNetwork)
+		}
+	}
+
+	// Expanded env for process (presets + instance)
+	_, _, envVars := features.Expand(inst.FeatureSets, customPresets, "", nil, inst.EnvVars)
+	var env []string
+	for _, e := range envVars {
+		if e.Name != "" {
+			env = append(env, e.Name+"="+e.Value)
 		}
 	}
 
@@ -210,6 +221,7 @@ func (r *Reconciler) applyInstance(ctx context.Context, inst db.Instance) error 
 		StatusPath:  paths.StatusFile(),
 		CCDDir:      paths.CCDDir(),
 		CCDFiles:    ccdFiles,
+		Env:         env,
 		PreUp:       inst.PreUp,
 		PostUp:      inst.PostUp,
 		PreDown:     inst.PreDown,

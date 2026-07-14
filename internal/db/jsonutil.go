@@ -56,3 +56,55 @@ func decodeRemotes(s string) []Remote {
 	}
 	return out
 }
+
+func encodePlugins(plugins []Plugin) string {
+	if plugins == nil {
+		plugins = []Plugin{}
+	}
+	b, err := json.Marshal(plugins)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
+}
+
+func decodePlugins(s string) []Plugin {
+	s = strings.TrimSpace(s)
+	if s == "" || s == "null" {
+		return []Plugin{}
+	}
+	var out []Plugin
+	if err := json.Unmarshal([]byte(s), &out); err != nil {
+		return []Plugin{}
+	}
+	if out == nil {
+		return []Plugin{}
+	}
+	return out
+}
+
+func encodeEnvVars(vars []EnvVar) string {
+	if vars == nil {
+		vars = []EnvVar{}
+	}
+	b, err := json.Marshal(vars)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
+}
+
+func decodeEnvVars(s string) []EnvVar {
+	s = strings.TrimSpace(s)
+	if s == "" || s == "null" {
+		return []EnvVar{}
+	}
+	var out []EnvVar
+	if err := json.Unmarshal([]byte(s), &out); err != nil {
+		return []EnvVar{}
+	}
+	if out == nil {
+		return []EnvVar{}
+	}
+	return out
+}

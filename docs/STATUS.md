@@ -16,6 +16,7 @@ openvpnd is under active development. This document tracks what works today vs p
 - [x] Prometheus exporter (instance/client metrics + reconcile histograms)
 - [x] SNMPv2c agent (optional; GET/GETNEXT/GETBULK)
 - [x] Managed PKI: CA create, server/client issue, tls-crypt, wire to instances/clients
+- [x] Extensions: plugins, env vars, feature_sets (builtin + custom), multi-binary
 - [x] Client `.ovpn` export (inline PEMs from paths)
 - [x] Presigned profile links + `openvpn://import-profile/` deep links
 - [x] Example configs, systemd unit, docs
@@ -33,12 +34,13 @@ OpenVPN has hundreds of options. First-class coverage is intentional and incompl
 | Conf import / adopt running processes | Planned |
 | TAP / `server-bridge` / VLAN | Not started |
 | IPv6 pools | Not started |
-| `auth-user-pass` / plugins / LDAP | Not started |
+| `auth-user-pass` / LDAP | Not started |
+| OpenVPN plugins / custom builds | Done (path + feature_sets + multi-binary) |
 | Full management API surface | Partial |
 | Bandwidth enforcement (tc/nft) | Fields only |
 | TUI | Done (foundation screens) |
 | Self-update from releases | Not started |
-| QR codes for profile URLs | Planned |
+| QR codes for profile URLs | Done (TUI profile link) |
 
 ## Roadmap (priority order)
 
