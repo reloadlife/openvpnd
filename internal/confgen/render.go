@@ -238,27 +238,42 @@ func RenderInstanceOpts(inst db.Instance, paths Paths, clients []db.Client, opts
 		fmt.Fprintf(&b, "\n# extensions (feature_sets + extra_directives)\n%s\n", extra)
 	}
 
-	// Global OpenVPN --shaper (outgoing only). Per-client shaping is tc/log via reconciler.
-	if strings.EqualFold(strings.TrimSpace(opts.BandwidthEnforcement), "shaper") && inst.Role == "server" {
+	// Global OpenVPN --shaper (outgoing only). Role-aware sources:
+	//   server → max of peer Client.bandwidth_* (or instance ceiling)
+	//   client → instance.bandwidth_* (whole tunnel outgoing)
+	// Per-peer / whole-device tc is applied by the reconciler in bandwidth_enforcement=tc.
+	if strings.EqualFold(strings.TrimSpace(opts.BandwidthEnforcement), "shaper") {
 		var maxBits int64
-		for _, c := range clients {
-			if c.BandwidthRxBps > maxBits {
-				maxBits = c.BandwidthRxBps
+		switch strings.ToLower(strings.TrimSpace(inst.Role)) {
+		case "server":
+			for _, c := range clients {
+				if c.BandwidthRxBps > maxBits {
+					maxBits = c.BandwidthRxBps
+				}
+				if c.BandwidthTxBps > maxBits {
+					maxBits = c.BandwidthTxBps
+				}
 			}
-			if c.BandwidthTxBps > maxBits {
-				maxBits = c.BandwidthTxBps
+			if inst.BandwidthRxBps > maxBits {
+				maxBits = inst.BandwidthRxBps
+			}
+			if inst.BandwidthTxBps > maxBits {
+				maxBits = inst.BandwidthTxBps
+			}
+		case "client":
+			maxBits = inst.BandwidthRxBps
+			if inst.BandwidthTxBps > maxBits {
+				maxBits = inst.BandwidthTxBps
 			}
 		}
 		if maxBits > 0 {
-			// --shaper takes bytes/sec; client fields are bits/sec (see bandwidth package).
+			// --shaper takes bytes/sec; our fields are bits/sec.
 			bytesPerSec := maxBits / 8
 			if bytesPerSec < 1 {
 				bytesPerSec = 1
 			}
-			fmt.Fprintf(&b, "\n# bandwidth_enforcement=shaper (global outgoing; max of client limits)\n")
+			fmt.Fprintf(&b, "\n# bandwidth_enforcement=shaper (outgoing only; role=%s)\n", inst.Role)
 			fmt.Fprintf(&b, "shaper %d\n", bytesPerSec)
-		} else if len(clients) > 0 {
-			fmt.Fprintf(&b, "\n# bandwidth_enforcement=shaper: no client bandwidth_* limits set\n")
 		}
 	}
 

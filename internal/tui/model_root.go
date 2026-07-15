@@ -1366,6 +1366,13 @@ func (m rootModel) submitInstForm() (tea.Model, tea.Cmd) {
 		req.Plugins = []pkgapi.Plugin{p}
 	}
 
+	if n, err := parseInt64Field(v["inst_bandwidth_rx"]); err == nil {
+		req.BandwidthRxBps = n
+	}
+	if n, err := parseInt64Field(v["inst_bandwidth_tx"]); err == nil {
+		req.BandwidthTxBps = n
+	}
+
 	if role == "server" {
 		issue := truthy(v["issue_cert"])
 		tlsCrypt := truthy(v["tls_crypt"])
@@ -1399,7 +1406,7 @@ func (m rootModel) submitInstForm() (tea.Model, tea.Cmd) {
 		req.ScriptSecurity, _ = parseIntField(v["script_security"])
 		req.UsernameAsCommonName = truthy(v["username_as_cn"])
 	} else {
-		// client instance: outbound connection
+		// client instance: outbound connection (whole-tunnel BW via inst_bandwidth_*)
 		req.Remote = v["remote"]
 		req.AuthUserPass = truthy(v["auth_user_pass"])
 		req.AuthUserPassFile = v["auth_user_pass_file"]

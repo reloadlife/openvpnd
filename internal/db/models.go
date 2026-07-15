@@ -110,6 +110,12 @@ type Instance struct {
 	UsernameAsCommonName  bool   `json:"username_as_common_name,omitempty"`
 	AuthUserPassFile      string `json:"auth_user_pass_file,omitempty"` // client: path after auth-user-pass
 	IfconfigIPv6          string `json:"ifconfig_ipv6,omitempty"`
+	// BandwidthRxBps / BandwidthTxBps are instance-level rate caps (bits/sec).
+	// Role semantics differ:
+	//   - client: whole-tunnel limit on Device (download/upload through the VPN)
+	//   - server: optional device ceiling on the TUN (peer limits live on Client rows)
+	BandwidthRxBps int64 `json:"bandwidth_rx_bps,omitempty"`
+	BandwidthTxBps int64 `json:"bandwidth_tx_bps,omitempty"`
 	ConfHash              string `json:"conf_hash,omitempty"`
 	PID              int     `json:"pid,omitempty"`
 	LastError        string  `json:"last_error,omitempty"`

@@ -252,25 +252,39 @@ func (r *Reconciler) applyInstance(ctx context.Context, inst db.Instance) error 
 		return err
 	}
 
-	// Bandwidth shaping sync (tc/log). shaper is conf-only; off is no-op.
-	if r.bw != nil && inst.Role == "server" {
+	// Bandwidth shaping — role-aware (do not mix models):
+	//   server → per-peer Client.bandwidth_* (+ optional instance device ceiling)
+	//   client → whole-tunnel instance.bandwidth_* on Device (no peer list)
+	if r.bw != nil {
 		if !inst.Enabled {
 			_ = r.bw.ClearInstance(ctx, inst.Name)
 		} else {
-			var limits []bandwidth.ClientLimit
-			for _, c := range clients {
-				if c.Suspended {
-					continue
+			switch strings.ToLower(strings.TrimSpace(inst.Role)) {
+			case "server":
+				var limits []bandwidth.ClientLimit
+				for _, c := range clients {
+					if c.Suspended {
+						continue
+					}
+					limits = append(limits, bandwidth.ClientLimit{
+						CommonName: c.CommonName,
+						StaticIP:   c.StaticIP,
+						RxBps:      c.BandwidthRxBps,
+						TxBps:      c.BandwidthTxBps,
+					})
 				}
-				limits = append(limits, bandwidth.ClientLimit{
-					CommonName: c.CommonName,
-					StaticIP:   c.StaticIP,
-					RxBps:      c.BandwidthRxBps,
-					TxBps:      c.BandwidthTxBps,
-				})
-			}
-			if err := r.bw.Sync(ctx, inst.Name, inst.Device, limits); err != nil {
-				r.log.Warn("bandwidth sync", "instance", inst.Name, "err", err)
+				if err := r.bw.Sync(ctx, inst.Name, inst.Device, limits); err != nil {
+					r.log.Warn("bandwidth peer sync", "instance", inst.Name, "err", err)
+				}
+				// Optional server TUN ceiling from instance-level fields.
+				if err := r.bw.SyncDevice(ctx, inst.Name, inst.Device, inst.BandwidthRxBps, inst.BandwidthTxBps); err != nil {
+					r.log.Warn("bandwidth device ceiling", "instance", inst.Name, "err", err)
+				}
+			case "client":
+				// Client tunnels: shape the entire TUN (zur0/de0/…), not "peers".
+				if err := r.bw.SyncDevice(ctx, inst.Name, inst.Device, inst.BandwidthRxBps, inst.BandwidthTxBps); err != nil {
+					r.log.Warn("bandwidth tunnel sync", "instance", inst.Name, "err", err)
+				}
 			}
 		}
 	}

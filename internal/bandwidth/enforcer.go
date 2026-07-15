@@ -47,6 +47,14 @@ type appliedClient struct {
 	Rules    []Rule
 }
 
+// appliedDevice is whole-interface shaping state (client tunnels / server ceiling).
+type appliedDevice struct {
+	Device string
+	RxBps  int64
+	TxBps  int64
+	Rules  []Rule
+}
+
 // Enforcer applies/removes shaping rules according to Mode.
 type Enforcer struct {
 	mode   Mode
@@ -54,7 +62,8 @@ type Enforcer struct {
 	runner Runner
 
 	mu       sync.Mutex
-	applied  map[string]map[string]appliedClient // instance → cn → state
+	applied  map[string]map[string]appliedClient // instance → cn → peer state (server role)
+	devices  map[string]appliedDevice            // instance → whole-device state (client role / ceiling)
 	nextCls  map[string]uint32                   // device → next class id
 	missing  map[string]bool                     // binary name → logged missing once
 }
@@ -69,6 +78,7 @@ func NewEnforcer(mode string, log *slog.Logger) *Enforcer {
 		log:     log,
 		runner:  execRunner{},
 		applied: make(map[string]map[string]appliedClient),
+		devices: make(map[string]appliedDevice),
 		nextCls: make(map[string]uint32),
 		missing: make(map[string]bool),
 	}
@@ -299,9 +309,84 @@ func (e *Enforcer) ClearInstance(ctx context.Context, instanceName string) error
 	for _, cn := range cns {
 		_ = e.Remove(ctx, instanceName, cn)
 	}
+	_ = e.ClearDevice(ctx, instanceName)
 	e.mu.Lock()
 	delete(e.applied, instanceName)
 	e.mu.Unlock()
+	return nil
+}
+
+// SyncDevice applies or clears whole-interface shaping for an instance.
+// Used for client-role tunnels (primary) and optional server-role TUN ceiling.
+// ModeShaper is confgen-only (no host commands).
+func (e *Enforcer) SyncDevice(ctx context.Context, instanceName, device string, rxBps, txBps int64) error {
+	if e == nil {
+		return nil
+	}
+	switch e.mode {
+	case ModeOff, ModeShaper:
+		return nil
+	case ModeTC, ModeLog:
+	default:
+		return nil
+	}
+	device = strings.TrimSpace(device)
+	if !NeedsDeviceShaping(rxBps, txBps) || device == "" {
+		return e.ClearDevice(ctx, instanceName)
+	}
+
+	e.mu.Lock()
+	prev, had := e.devices[instanceName]
+	if had && prev.Device == device && prev.RxBps == rxBps && prev.TxBps == txBps {
+		e.mu.Unlock()
+		return nil
+	}
+	oldRules := prev.Rules
+	e.mu.Unlock()
+
+	if had && len(oldRules) > 0 {
+		_ = e.runRules(ctx, RemoveRules(oldRules), true)
+	}
+
+	rules := PlanDevice(DevicePlanInput{Device: device, RxBps: rxBps, TxBps: txBps})
+	if len(rules) == 0 {
+		return e.ClearDevice(ctx, instanceName)
+	}
+	if e.mode == ModeTC && !e.binAvailable("tc") {
+		return nil
+	}
+	if err := e.runRules(ctx, ApplyRules(rules), false); err != nil {
+		return err
+	}
+	e.mu.Lock()
+	e.devices[instanceName] = appliedDevice{
+		Device: device, RxBps: rxBps, TxBps: txBps, Rules: rules,
+	}
+	e.mu.Unlock()
+	e.log.Info("bandwidth device applied",
+		"instance", instanceName, "device", device,
+		"rx_bps", rxBps, "tx_bps", txBps, "mode", e.mode)
+	return nil
+}
+
+// ClearDevice removes whole-interface shaping for an instance.
+func (e *Enforcer) ClearDevice(ctx context.Context, instanceName string) error {
+	if e == nil {
+		return nil
+	}
+	e.mu.Lock()
+	prev, ok := e.devices[instanceName]
+	if ok {
+		delete(e.devices, instanceName)
+	}
+	e.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	if err := e.runRules(ctx, RemoveRules(prev.Rules), true); err != nil {
+		e.log.Warn("bandwidth device remove", "instance", instanceName, "err", err)
+	}
+	e.log.Info("bandwidth device removed", "instance", instanceName, "device", prev.Device)
 	return nil
 }
 

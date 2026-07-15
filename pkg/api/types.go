@@ -193,6 +193,11 @@ type InstanceCreateRequest struct {
 	UsernameAsCommonName bool   `json:"username_as_common_name,omitempty"`
 	AuthUserPassFile     string `json:"auth_user_pass_file,omitempty"`
 	IfconfigIPv6         string `json:"ifconfig_ipv6,omitempty"`
+	// Instance-level rate caps (bits/sec). Semantics by role:
+	//   client → whole-tunnel limit on Device; server → optional TUN ceiling
+	//   (per-peer limits are on ClientCreate/Update, not here).
+	BandwidthRxBps int64 `json:"bandwidth_rx_bps,omitempty"`
+	BandwidthTxBps int64 `json:"bandwidth_tx_bps,omitempty"`
 
 	// Automation (server mTLS)
 	IssueServerCert  *bool  `json:"issue_server_cert,omitempty"`  // default true when cert paths empty + CA available
@@ -358,6 +363,9 @@ type InstanceUpdateRequest struct {
 	UsernameAsCommonName *bool   `json:"username_as_common_name,omitempty"`
 	AuthUserPassFile     *string `json:"auth_user_pass_file,omitempty"`
 	IfconfigIPv6         *string `json:"ifconfig_ipv6,omitempty"`
+	// Instance-level rate caps (bits/sec). See InstanceCreateRequest for role semantics.
+	BandwidthRxBps *int64 `json:"bandwidth_rx_bps,omitempty"`
+	BandwidthTxBps *int64 `json:"bandwidth_tx_bps,omitempty"`
 }
 
 // MgmtCommandRequest is a whitelisted OpenVPN management interface command.
@@ -461,6 +469,10 @@ type Instance struct {
 	UsernameAsCommonName bool      `json:"username_as_common_name,omitempty"`
 	AuthUserPassFile     string    `json:"auth_user_pass_file,omitempty"`
 	IfconfigIPv6         string    `json:"ifconfig_ipv6,omitempty"`
+	// Instance-level rate caps (bits/sec). Role semantics: client = whole tunnel;
+	// server = optional device ceiling (peers use Client.bandwidth_*).
+	BandwidthRxBps       int64     `json:"bandwidth_rx_bps,omitempty"`
+	BandwidthTxBps       int64     `json:"bandwidth_tx_bps,omitempty"`
 	PublicEndpoint       string    `json:"public_endpoint,omitempty"`
 	PID                  int       `json:"pid,omitempty"`
 	LastError            string    `json:"last_error,omitempty"`

@@ -1,5 +1,7 @@
 package bandwidth_test
 
+// device-plan tests live next to peer Plan tests below.
+
 import (
 	"context"
 	"log/slog"
@@ -84,6 +86,33 @@ func TestMaxShaperBytesPerSec(t *testing.T) {
 	require.Equal(t, int64(2000), n)
 	// tiny bitrate still ≥ 1 byte/s
 	require.Equal(t, int64(1), bandwidth.MaxShaperBytesPerSec([]bandwidth.ClientLimit{{RxBps: 4}}))
+}
+
+func TestPlanDeviceWholeTunnel(t *testing.T) {
+	// Client-role: shape entire TUN without per-IP filters.
+	rules := bandwidth.PlanDevice(bandwidth.DevicePlanInput{
+		Device: "zur0",
+		RxBps:  10_000_000,
+		TxBps:  5_000_000,
+	})
+	require.NotEmpty(t, rules)
+	joined := ""
+	for _, r := range bandwidth.ApplyRules(rules) {
+		joined += r.String() + "\n"
+	}
+	require.Contains(t, joined, "qdisc replace dev zur0 root handle 1: htb")
+	require.Contains(t, joined, "classid 1:10 htb rate 5000000bit")
+	require.Contains(t, joined, "police rate 10000000bit")
+	require.NotContains(t, joined, "match ip dst")
+	require.NotContains(t, joined, "match ip src")
+	require.Nil(t, bandwidth.PlanDevice(bandwidth.DevicePlanInput{Device: "zur0"}))
+	require.Equal(t, int64(1250000), bandwidth.ShaperBytesPerSec(10_000_000, 5_000_000))
+}
+
+func TestSyncDeviceLogMode(t *testing.T) {
+	e := bandwidth.NewEnforcer("log", slog.Default())
+	require.NoError(t, e.SyncDevice(context.Background(), "zur0", "zur0", 1_000_000, 500_000))
+	require.NoError(t, e.ClearDevice(context.Background(), "zur0"))
 }
 
 func TestExceedsTrafficLimit(t *testing.T) {

@@ -1,5 +1,12 @@
-// Package bandwidth plans and applies per-client traffic shaping and checks
-// cumulative traffic limits for openvpnd server clients.
+// Package bandwidth plans and applies traffic shaping and checks cumulative
+// traffic limits for openvpnd.
+//
+// Role semantics (keep separate — do not mix):
+//
+//   - server: per-peer limits on Client rows (CN + static_ip → tc filters),
+//     optional instance-level Device ceiling via PlanDevice.
+//   - client: whole-tunnel limits on the instance Device (PlanDevice only);
+//     there are no VPN "peers" to shape individually.
 package bandwidth
 
 import (
@@ -230,6 +237,112 @@ func MaxShaperBytesPerSec(clients []ClientLimit) int64 {
 // NeedsShaping reports whether the client has a static IP and a positive limit.
 func NeedsShaping(staticIP string, rxBps, txBps int64) bool {
 	return strings.TrimSpace(staticIP) != "" && (rxBps > 0 || txBps > 0)
+}
+
+// NeedsDeviceShaping reports whether a whole-interface (client tunnel / server ceiling) limit is set.
+func NeedsDeviceShaping(rxBps, txBps int64) bool {
+	return rxBps > 0 || txBps > 0
+}
+
+// DevicePlanInput is whole-interface shaping (no per-IP filter).
+// Directions match host netdev counters on the TUN:
+//
+//	RxBps — download (ingress into the host from the tunnel)
+//	TxBps — upload (egress from the host into the tunnel)
+type DevicePlanInput struct {
+	Device string
+	RxBps  int64
+	TxBps  int64
+}
+
+// PlanDevice returns tc rules that rate-limit the entire Device (client-role tunnels).
+func PlanDevice(in DevicePlanInput) []Rule {
+	dev := strings.TrimSpace(in.Device)
+	if dev == "" || !NeedsDeviceShaping(in.RxBps, in.TxBps) {
+		return nil
+	}
+	var rules []Rule
+
+	if in.TxBps > 0 {
+		rate := formatBitRate(in.TxBps)
+		// Egress HTB: all traffic leaving the host into the tunnel (upload).
+		rules = append(rules, Rule{
+			Bin:  "tc",
+			Args: []string{"qdisc", "replace", "dev", dev, "root", "handle", "1:", "htb", "default", "10"},
+			Desc: fmt.Sprintf("device root htb on %s", dev),
+		})
+		rules = append(rules, Rule{
+			Bin: "tc",
+			Args: []string{
+				"class", "replace", "dev", dev, "parent", "1:", "classid", "1:10",
+				"htb", "rate", rate, "ceil", rate,
+			},
+			Desc: fmt.Sprintf("device egress class rate %s on %s", rate, dev),
+		})
+		rules = append(rules, Rule{
+			Bin:  "tc",
+			Args: []string{"class", "del", "dev", dev, "classid", "1:10"},
+			Desc: fmt.Sprintf("undo device egress class on %s", dev),
+			Undo: true,
+		})
+		rules = append(rules, Rule{
+			Bin:  "tc",
+			Args: []string{"qdisc", "del", "dev", dev, "root"},
+			Desc: fmt.Sprintf("undo device root qdisc on %s", dev),
+			Undo: true,
+		})
+	}
+
+	if in.RxBps > 0 {
+		rate := formatBitRate(in.RxBps)
+		burst := ingressBurst(in.RxBps)
+		// Ingress police: all traffic arriving from the tunnel (download).
+		rules = append(rules, Rule{
+			Bin:  "tc",
+			Args: []string{"qdisc", "replace", "dev", dev, "handle", "ffff:", "ingress"},
+			Desc: fmt.Sprintf("device ingress qdisc on %s", dev),
+		})
+		rules = append(rules, Rule{
+			Bin: "tc",
+			Args: []string{
+				"filter", "replace", "dev", dev, "parent", "ffff:", "protocol", "ip",
+				"prio", "1", "u32", "match", "u32", "0", "0",
+				"police", "rate", rate, "burst", burst, "drop", "flowid", ":1",
+			},
+			Desc: fmt.Sprintf("device ingress police rate %s on %s", rate, dev),
+		})
+		rules = append(rules, Rule{
+			Bin:  "tc",
+			Args: []string{"filter", "del", "dev", dev, "parent", "ffff:", "prio", "1"},
+			Desc: fmt.Sprintf("undo device ingress filter on %s", dev),
+			Undo: true,
+		})
+		rules = append(rules, Rule{
+			Bin:  "tc",
+			Args: []string{"qdisc", "del", "dev", dev, "handle", "ffff:", "ingress"},
+			Desc: fmt.Sprintf("undo device ingress qdisc on %s", dev),
+			Undo: true,
+		})
+	}
+
+	return rules
+}
+
+// ShaperBytesPerSec converts bits/sec rate fields to OpenVPN --shaper bytes/sec.
+// Uses the max of rx/tx when both set (OpenVPN shaper is single outgoing only).
+func ShaperBytesPerSec(rxBps, txBps int64) int64 {
+	maxBits := rxBps
+	if txBps > maxBits {
+		maxBits = txBps
+	}
+	if maxBits <= 0 {
+		return 0
+	}
+	bps := maxBits / 8
+	if bps < 1 {
+		bps = 1
+	}
+	return bps
 }
 
 // ExceedsTrafficLimit reports whether effective rx+tx reached the quota.

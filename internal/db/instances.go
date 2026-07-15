@@ -21,6 +21,7 @@ max_clients, tls_version_min, tun_mtu, sndbuf, rcvbuf, server_ipv6, auth_user_pa
 bridge_mode, bridge_gateway, bridge_pool_start, bridge_pool_end, bridge_netmask,
 tls_cipher, tls_ciphersuites, tls_groups, tls_cert_profile,
 auth_user_pass_verify, script_security, username_as_common_name, auth_user_pass_file, ifconfig_ipv6,
+bandwidth_rx_bps, bandwidth_tx_bps,
 conf_hash, pid, last_error,
 last_rx_bytes, last_tx_bytes, last_rx_bps, last_tx_bps, connected_clients,
 public_endpoint,
@@ -48,6 +49,7 @@ func scanInstance(scanner interface {
 		&bridgeMode, &i.BridgeGateway, &i.BridgePoolStart, &i.BridgePoolEnd, &i.BridgeNetmask,
 		&i.TLSCipher, &i.TLSCiphersuites, &i.TLSGroups, &i.TLSCertProfile,
 		&i.AuthUserPassVerify, &i.ScriptSecurity, &usernameAsCN, &i.AuthUserPassFile, &i.IfconfigIPv6,
+		&i.BandwidthRxBps, &i.BandwidthTxBps,
 		&i.ConfHash, &i.PID, &i.LastError,
 		&i.LastRxBytes, &i.LastTxBytes, &i.LastRxBps, &i.LastTxBps, &i.ConnectedClients,
 		&i.PublicEndpoint,
@@ -116,6 +118,7 @@ INSERT INTO instances (
   bridge_mode, bridge_gateway, bridge_pool_start, bridge_pool_end, bridge_netmask,
   tls_cipher, tls_ciphersuites, tls_groups, tls_cert_profile,
   auth_user_pass_verify, script_security, username_as_common_name, auth_user_pass_file, ifconfig_ipv6,
+  bandwidth_rx_bps, bandwidth_tx_bps,
   conf_hash, pid, last_error,
   last_rx_bytes, last_tx_bytes, last_rx_bps, last_tx_bps, connected_clients,
   public_endpoint,
@@ -127,6 +130,7 @@ INSERT INTO instances (
   ?,?,?,?,?,
   ?,?,?,?,
   ?,?,?,?,?,
+  ?,?,
   '', 0, '', 0,0,0,0,0, ?, ?,?
 )`,
 		i.Name, i.Role, boolToInt(i.Enabled), i.BinaryName, i.BinaryPath,
@@ -142,6 +146,7 @@ INSERT INTO instances (
 		boolToInt(i.BridgeMode), i.BridgeGateway, i.BridgePoolStart, i.BridgePoolEnd, i.BridgeNetmask,
 		i.TLSCipher, i.TLSCiphersuites, i.TLSGroups, i.TLSCertProfile,
 		i.AuthUserPassVerify, i.ScriptSecurity, boolToInt(i.UsernameAsCommonName), i.AuthUserPassFile, i.IfconfigIPv6,
+		i.BandwidthRxBps, i.BandwidthTxBps,
 		i.PublicEndpoint,
 		now, now,
 	)
@@ -226,6 +231,7 @@ UPDATE instances SET
   bridge_mode=?, bridge_gateway=?, bridge_pool_start=?, bridge_pool_end=?, bridge_netmask=?,
   tls_cipher=?, tls_ciphersuites=?, tls_groups=?, tls_cert_profile=?,
   auth_user_pass_verify=?, script_security=?, username_as_common_name=?, auth_user_pass_file=?, ifconfig_ipv6=?,
+  bandwidth_rx_bps=?, bandwidth_tx_bps=?,
   conf_hash=?, public_endpoint=?, updated_at=?
 WHERE name=?`,
 		i.Role, boolToInt(i.Enabled), i.BinaryName, i.BinaryPath,
@@ -241,6 +247,7 @@ WHERE name=?`,
 		boolToInt(i.BridgeMode), i.BridgeGateway, i.BridgePoolStart, i.BridgePoolEnd, i.BridgeNetmask,
 		i.TLSCipher, i.TLSCiphersuites, i.TLSGroups, i.TLSCertProfile,
 		i.AuthUserPassVerify, i.ScriptSecurity, boolToInt(i.UsernameAsCommonName), i.AuthUserPassFile, i.IfconfigIPv6,
+		i.BandwidthRxBps, i.BandwidthTxBps,
 		i.ConfHash, i.PublicEndpoint, now, i.Name,
 	)
 	if err != nil {

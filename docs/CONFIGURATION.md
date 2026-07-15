@@ -83,13 +83,22 @@ Per instance: `binary_name: v24` or `binary_path: /custom/openvpn`.
 
 ## Bandwidth enforcement
 
-Client fields `bandwidth_rx_bps` / `bandwidth_tx_bps` (bits/sec) and `traffic_limit_bytes` are stored in SQLite. Enforcement mode:
+**Role models differ — do not mix them:**
+
+| Role | What you limit | Where the knobs live |
+|------|----------------|----------------------|
+| **server** | Each connected **peer** (VPN user / CN), optionally the whole TUN as a ceiling | Peer: client `bandwidth_rx_bps` / `bandwidth_tx_bps` (+ `traffic_limit_bytes` quota). Ceiling: instance `bandwidth_*` |
+| **client** | The **whole tunnel** (e.g. `zur0`, `de0`) — no multi-peer users | Instance `bandwidth_rx_bps` / `bandwidth_tx_bps` on that client instance |
+
+Directions are bits/sec (same unit as live rate metrics): **rx** = download, **tx** = upload.
+
+Enforcement mode (`openvpn.bandwidth_enforcement`):
 
 | Mode | Behavior |
 |------|----------|
-| `off` | Default. No shaping. `traffic_limit_bytes` still suspends clients when exceeded. |
-| `tc` | Linux `tc` HTB (egress = client download) + ingress police (upload). Requires instance `device` (e.g. `tun0`) and `iproute2`. Soft no-op if `tc` is missing. |
-| `shaper` | Confgen emits global OpenVPN `shaper N` (bytes/sec) from max client limit. Outgoing only; not per-client. |
+| `off` | Default. No shaping. Peer `traffic_limit_bytes` still suspends when exceeded. |
+| `tc` | Linux `tc`. **Server peers:** HTB + ingress police per peer **static IP**. **Client tunnels / server ceiling:** whole-device HTB + ingress on `device`. Needs named `device` + `iproute2`. Soft no-op if `tc` missing. |
+| `shaper` | Confgen emits global OpenVPN `shaper N` (bytes/sec, **outgoing only**). Server: max of peer (+ instance) limits. Client: instance limits. |
 | `log` | Plans the same `tc` rules as `tc` mode and logs them (dry-run). |
 
 ```yaml
@@ -97,7 +106,7 @@ openvpn:
   bandwidth_enforcement: tc   # off | tc | shaper | log
 ```
 
-Reconciler applies/removes rules after `EnsureInstance`. Removed clients or cleared limits drop host rules. Over-quota clients are suspended (`disable` in CCD) and killed via management if connected.
+Reconciler applies/removes rules after `EnsureInstance`. Cleared limits drop host rules. Over-quota **server peers** are suspended (`disable` in CCD) and killed via management if connected.
 
 ## IP assignment (no DHCP)
 

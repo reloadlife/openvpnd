@@ -577,6 +577,8 @@ func createInputFromAPI(req pkgapi.InstanceCreateRequest) (instance.CreateInput,
 		UsernameAsCommonName: req.UsernameAsCommonName,
 		AuthUserPassFile:     req.AuthUserPassFile,
 		IfconfigIPv6:         req.IfconfigIPv6,
+		BandwidthRxBps:       req.BandwidthRxBps,
+		BandwidthTxBps:       req.BandwidthTxBps,
 		CAName:               req.CAName, ServerCN: req.ServerCN, CreateCAIfEmpty: req.CreateCAIfEmpty,
 	}
 	if req.IssueServerCert != nil {
@@ -788,6 +790,12 @@ func (s *Server) handleUpdateInstance(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.IfconfigIPv6 != nil {
 		inst.IfconfigIPv6 = *req.IfconfigIPv6
+	}
+	if req.BandwidthRxBps != nil {
+		inst.BandwidthRxBps = *req.BandwidthRxBps
+	}
+	if req.BandwidthTxBps != nil {
+		inst.BandwidthTxBps = *req.BandwidthTxBps
 	}
 	out, err := s.store.UpdateInstance(r.Context(), inst)
 	if err != nil {
@@ -1106,6 +1114,8 @@ func (s *Server) toAPIInstance(i db.Instance) pkgapi.Instance {
 		UsernameAsCommonName: i.UsernameAsCommonName,
 		AuthUserPassFile:     i.AuthUserPassFile,
 		IfconfigIPv6:         i.IfconfigIPv6,
+		BandwidthRxBps:       i.BandwidthRxBps,
+		BandwidthTxBps:       i.BandwidthTxBps,
 		PublicEndpoint:       i.PublicEndpoint,
 		PID:                  i.PID, LastError: i.LastError, ConnectedClients: i.ConnectedClients,
 		RxBytes: i.LastRxBytes, TxBytes: i.LastTxBytes, RxBps: i.LastRxBps, TxBps: i.LastTxBps,

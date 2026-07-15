@@ -80,6 +80,9 @@ type CreateInput struct {
 	UsernameAsCommonName bool
 	AuthUserPassFile     string
 	IfconfigIPv6         string
+	// Instance-level rate caps (bits/sec). See db.Instance for role semantics.
+	BandwidthRxBps int64
+	BandwidthTxBps int64
 
 	// Automation flags
 	IssueServerCert  bool   // after create: issue server cert from CA
@@ -400,6 +403,8 @@ func Prepare(in CreateInput, ctx Context) (Result, error) {
 		UsernameAsCommonName: in.UsernameAsCommonName,
 		AuthUserPassFile:     strings.TrimSpace(in.AuthUserPassFile),
 		IfconfigIPv6:         strings.TrimSpace(in.IfconfigIPv6),
+		BandwidthRxBps:       in.BandwidthRxBps,
+		BandwidthTxBps:       in.BandwidthTxBps,
 	}
 	if inst.BridgeMode {
 		if inst.BridgeGateway == "" || inst.BridgeNetmask == "" ||

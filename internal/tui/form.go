@@ -769,6 +769,16 @@ func instanceCreateFields(binaries []string) []fieldDef {
 			Tip:  "Client ifconfig-ipv6 when the server expects a fixed IPv6 endpoint.",
 		},
 		{
+			Key: "inst_bandwidth_rx", Label: "Iface RX bps",
+			Hint: "0 = unlimited (download)",
+			Tip:  "Instance-level download cap (bits/sec) on Device. Client role: whole tunnel (e.g. zur0). Server role: optional TUN ceiling (per-peer caps are on the Client form). Needs bandwidth_enforcement=tc|shaper|log + Device name.",
+		},
+		{
+			Key: "inst_bandwidth_tx", Label: "Iface TX bps",
+			Hint: "0 = unlimited (upload)",
+			Tip:  "Instance-level upload cap (bits/sec) on Device. Client = whole tunnel; server = optional ceiling. Peer-level limits stay on Client form (server only).",
+		},
+		{
 			Key: "pki_ca", Label: "CA path", Kind: fieldFile, AllowedTypes: []string{".crt", ".pem", ".cer"}, Roles: []string{"client"},
 			Hint: "ca.crt",
 			Tip:  "Path to the CA that signed the server (and usually the client) certificate. Required for mTLS unless using static key. Auto-filled from Profile when possible.",
@@ -920,19 +930,19 @@ func clientCreateFields(servers []string) []fieldDef {
 			Tip:  "CSV of push options to strip for this client (push-remove style disable list).",
 		},
 		{
-			Key: "bandwidth_rx", Label: "BW RX bps",
-			Hint: "bytes/sec receive cap",
-			Tip:  "Soft receive bandwidth limit in bytes/sec (0/empty = unlimited).",
+			Key: "bandwidth_rx", Label: "Peer RX bps",
+			Hint: "bits/sec download to peer",
+			Tip:  "Server-role only: rate limit download to this peer (bits/sec). Needs static_ip + bandwidth_enforcement=tc. Not used for client-role tunnels (use instance Tunnel RX/TX).",
 		},
 		{
-			Key: "bandwidth_tx", Label: "BW TX bps",
-			Hint: "bytes/sec transmit cap",
-			Tip:  "Soft transmit bandwidth limit in bytes/sec (0/empty = unlimited).",
+			Key: "bandwidth_tx", Label: "Peer TX bps",
+			Hint: "bits/sec upload from peer",
+			Tip:  "Server-role only: rate limit upload from this peer (bits/sec). Client-role whole-tunnel caps live on the instance form.",
 		},
 		{
 			Key: "traffic_limit", Label: "Traffic cap",
 			Hint: "total bytes before suspend",
-			Tip:  "Lifetime limit in bytes; daemon may suspend when exceeded. 0/empty = none.",
+			Tip:  "Peer volume quota in bytes; suspend + kill when exceeded. 0/empty = none. Server peers only.",
 		},
 		{
 			Key: "issue_cert", Label: "Issue cert", Kind: fieldBool, Section: "One-shot provisioning",
