@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -288,6 +291,12 @@ func (r *Reconciler) applyInstance(ctx context.Context, inst db.Instance) error 
 				up = true
 				rx, tx = st.RxBytes, st.TxBytes
 				nClients = len(st.Clients)
+				// Client tunnels often report no CLIENT_LIST; prefer iface counters when Device is set.
+				if (rx == 0 && tx == 0) && strings.TrimSpace(inst.Device) != "" {
+					if irx, itx, ierr := readIfaceBytes(inst.Device); ierr == nil {
+						rx, tx = irx, itx
+					}
+				}
 				now := time.Now().UTC()
 				key := inst.Name
 				if prev, ok := r.prevSample[key]; ok && !prev.at.IsZero() {
@@ -390,13 +399,18 @@ func (r *Reconciler) applyInstance(ctx context.Context, inst db.Instance) error 
 				lastErr = err.Error()
 			}
 		} else {
-			// management not ready yet — check list live
+			// management not ready yet — check list live + iface counters
 			lives, _ := r.backend.ListLive(ctx)
 			for _, li := range lives {
 				if li.Name == inst.Name && li.Up {
 					up = true
 					pid = li.PID
 					rx, tx = li.RxBytes, li.TxBytes
+				}
+			}
+			if up && rx == 0 && tx == 0 && strings.TrimSpace(inst.Device) != "" {
+				if irx, itx, ierr := readIfaceBytes(inst.Device); ierr == nil {
+					rx, tx = irx, itx
 				}
 			}
 			if !up {
@@ -438,4 +452,32 @@ func (r *Reconciler) applyInstance(ctx context.Context, inst db.Instance) error 
 	// persist conf hash on instance row for next comparison via UpdateInstance is heavy; runtime is enough
 	_ = filepath.Separator
 	return nil
+}
+
+// readIfaceBytes returns cumulative rx/tx byte counters for a Linux netdev
+// (e.g. zur0, de0). Used for client-tunnel throughput when management has no
+// CLIENT_LIST. Rejects names with path separators.
+func readIfaceBytes(dev string) (rx, tx int64, err error) {
+	dev = strings.TrimSpace(dev)
+	if dev == "" || strings.Contains(dev, "/") || strings.Contains(dev, "..") {
+		return 0, 0, fmt.Errorf("invalid device %q", dev)
+	}
+	base := filepath.Join("/sys/class/net", dev, "statistics")
+	rb, err := os.ReadFile(filepath.Join(base, "rx_bytes"))
+	if err != nil {
+		return 0, 0, err
+	}
+	tb, err := os.ReadFile(filepath.Join(base, "tx_bytes"))
+	if err != nil {
+		return 0, 0, err
+	}
+	rx, err = strconv.ParseInt(strings.TrimSpace(string(rb)), 10, 64)
+	if err != nil {
+		return 0, 0, err
+	}
+	tx, err = strconv.ParseInt(strings.TrimSpace(string(tb)), 10, 64)
+	if err != nil {
+		return 0, 0, err
+	}
+	return rx, tx, nil
 }

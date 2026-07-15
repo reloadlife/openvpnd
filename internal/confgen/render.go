@@ -126,8 +126,11 @@ func RenderInstanceOpts(inst db.Instance, paths Paths, clients []db.Client, opts
 		return RenderResult{}, fmt.Errorf("unknown role %q", inst.Role)
 	}
 
-	// Crypto paths
-	if inst.AuthMode == "static_key" || inst.StaticKeyPath != "" {
+	// Crypto paths.
+	// StaticKeyPath is dual-purpose:
+	//   - AuthMode=static_key → OpenVPN "secret" (point-to-point static key)
+	//   - otherwise (PKI)     → "tls-auth" HMAC key (common on commercial client .ovpn)
+	if inst.AuthMode == "static_key" {
 		if inst.StaticKeyPath != "" {
 			fmt.Fprintf(&b, "secret %s\n", inst.StaticKeyPath)
 		}
@@ -150,6 +153,10 @@ func RenderInstanceOpts(inst db.Instance, paths Paths, clients []db.Client, opts
 		}
 		if inst.PKITLSCryptPath != "" {
 			fmt.Fprintf(&b, "tls-crypt %s\n", inst.PKITLSCryptPath)
+		}
+		if inst.StaticKeyPath != "" {
+			// key-direction (if any) is preserved via extra_directives from import/adopt.
+			fmt.Fprintf(&b, "tls-auth %s\n", inst.StaticKeyPath)
 		}
 		if inst.Role == "server" && inst.PKICRLPath != "" {
 			fmt.Fprintf(&b, "crl-verify %s\n", inst.PKICRLPath)

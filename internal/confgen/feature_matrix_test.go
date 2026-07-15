@@ -105,7 +105,17 @@ func TestTierAFeatureMatrix(t *testing.T) {
 				i.StaticKeyPath = "/pki/static.key"
 			},
 			want:    []string{"secret /pki/static.key"},
-			notWant: []string{"ca /", "cert /", "key /"},
+			notWant: []string{"ca /", "cert /", "key /", "tls-auth "},
+		},
+		{
+			name: "tls-auth with pki",
+			mutate: func(i *db.Instance) {
+				i.AuthMode = "pki"
+				i.PKICaPath = "/pki/ca.crt"
+				i.StaticKeyPath = "/pki/tls-auth.key"
+			},
+			want:    []string{"ca /pki/ca.crt", "tls-auth /pki/tls-auth.key"},
+			notWant: []string{"secret /pki/tls-auth.key"},
 		},
 		{
 			name:   "cipher",
