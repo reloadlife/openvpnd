@@ -313,7 +313,8 @@ func (r *Reconciler) applyInstance(ctx context.Context, inst db.Instance) error 
 	// Sample live state
 	pid := 0
 	up := false
-	var rx, tx int64
+	// Default to durable totals so a failed sample cannot zero lifetime counters.
+	rx, tx := inst.LastRxBytes, inst.LastTxBytes
 	var rxBps, txBps float64
 	nClients := 0
 	lastErr := ""
@@ -324,21 +325,22 @@ func (r *Reconciler) applyInstance(ctx context.Context, inst db.Instance) error 
 			_ = mgmt.Close()
 			if err == nil {
 				up = true
-				rx, tx = st.RxBytes, st.TxBytes
+				rawRx, rawTx := st.RxBytes, st.TxBytes
 				nClients = len(st.Clients)
 				// Client tunnels often report no CLIENT_LIST; prefer iface counters when Device is set.
-				if (rx == 0 && tx == 0) && strings.TrimSpace(inst.Device) != "" {
+				if (rawRx == 0 && rawTx == 0) && strings.TrimSpace(inst.Device) != "" {
 					if irx, itx, ierr := readIfaceBytes(inst.Device); ierr == nil {
-						rx, tx = irx, itx
+						rawRx, rawTx = irx, itx
 					}
 				}
 				now := time.Now().UTC()
 				key := inst.Name
-				if prev, ok := r.prevSample[key]; ok && !prev.at.IsZero() {
-					dt := now.Sub(prev.at).Seconds()
+				prevInst, hasPrevInst := r.prevSample[key]
+				if hasPrevInst && !prevInst.at.IsZero() {
+					dt := now.Sub(prevInst.at).Seconds()
 					if dt > 0 {
-						rxBps = float64(rx-prev.rx) * 8 / dt
-						txBps = float64(tx-prev.tx) * 8 / dt
+						rxBps = float64(rawRx-prevInst.rx) * 8 / dt
+						txBps = float64(rawTx-prevInst.tx) * 8 / dt
 						if rxBps < 0 {
 							rxBps = 0
 						}
@@ -347,7 +349,10 @@ func (r *Reconciler) applyInstance(ctx context.Context, inst db.Instance) error 
 						}
 					}
 				}
-				r.prevSample[key] = sample{rx: rx, tx: tx, at: now}
+				// Persist lifetime totals — OpenVPN/session and iface counters reset on restart.
+				rx = stats.AccumulateLifetime(inst.LastRxBytes, rawRx, prevInst.rx, hasPrevInst)
+				tx = stats.AccumulateLifetime(inst.LastTxBytes, rawTx, prevInst.tx, hasPrevInst)
+				r.prevSample[key] = sample{rx: rawRx, tx: rawTx, at: now}
 
 				// update per-client runtime
 				byCN := map[string]ovpnbackend.LiveClient{}
@@ -381,21 +386,23 @@ func (r *Reconciler) applyInstance(ctx context.Context, inst db.Instance) error 
 				for i := range clients {
 					c := clients[i]
 					lc, connected := byCN[c.CommonName]
+					// Default: keep durable lifetime when disconnected (do not zero).
 					crx, ctxb := c.LastRxBytes, c.LastTxBytes
 					crxBps, ctxBps := 0.0, 0.0
 					realAddr, virtAddr, since := "", "", ""
 					if connected {
-						crx, ctxb = lc.RxBytes, lc.TxBytes
+						rawCRx, rawCTx := lc.RxBytes, lc.TxBytes
 						realAddr, virtAddr = lc.RealAddress, lc.VirtualAddress
 						if !lc.ConnectedSince.IsZero() {
 							since = lc.ConnectedSince.UTC().Format(time.RFC3339)
 						}
 						ck := inst.Name + "/" + c.CommonName
-						if prev, ok := r.prevSample[ck]; ok && !prev.at.IsZero() {
+						prev, hasPrev := r.prevSample[ck]
+						if hasPrev && !prev.at.IsZero() {
 							dt := now.Sub(prev.at).Seconds()
 							if dt > 0 {
-								crxBps = float64(crx-prev.rx) * 8 / dt
-								ctxBps = float64(ctxb-prev.tx) * 8 / dt
+								crxBps = float64(rawCRx-prev.rx) * 8 / dt
+								ctxBps = float64(rawCTx-prev.tx) * 8 / dt
 								if crxBps < 0 {
 									crxBps = 0
 								}
@@ -404,7 +411,10 @@ func (r *Reconciler) applyInstance(ctx context.Context, inst db.Instance) error 
 								}
 							}
 						}
-						r.prevSample[ck] = sample{rx: crx, tx: ctxb, at: now}
+						// Session counters reset on reconnect/server restart — accumulate.
+						crx = stats.AccumulateLifetime(c.LastRxBytes, rawCRx, prev.rx, hasPrev)
+						ctxb = stats.AccumulateLifetime(c.LastTxBytes, rawCTx, prev.tx, hasPrev)
+						r.prevSample[ck] = sample{rx: rawCRx, tx: rawCTx, at: now}
 					}
 
 					// Peer policy: traffic quota (live counters) and late expire check.
@@ -455,17 +465,28 @@ func (r *Reconciler) applyInstance(ctx context.Context, inst db.Instance) error 
 		} else {
 			// management not ready yet — check list live + iface counters
 			lives, _ := r.backend.ListLive(ctx)
+			var rawRx, rawTx int64
+			var saw bool
 			for _, li := range lives {
 				if li.Name == inst.Name && li.Up {
 					up = true
 					pid = li.PID
-					rx, tx = li.RxBytes, li.TxBytes
+					rawRx, rawTx = li.RxBytes, li.TxBytes
+					saw = true
 				}
 			}
-			if up && rx == 0 && tx == 0 && strings.TrimSpace(inst.Device) != "" {
+			if up && rawRx == 0 && rawTx == 0 && strings.TrimSpace(inst.Device) != "" {
 				if irx, itx, ierr := readIfaceBytes(inst.Device); ierr == nil {
-					rx, tx = irx, itx
+					rawRx, rawTx = irx, itx
+					saw = true
 				}
+			}
+			if saw {
+				key := inst.Name
+				prevInst, hasPrevInst := r.prevSample[key]
+				rx = stats.AccumulateLifetime(inst.LastRxBytes, rawRx, prevInst.rx, hasPrevInst)
+				tx = stats.AccumulateLifetime(inst.LastTxBytes, rawTx, prevInst.tx, hasPrevInst)
+				r.prevSample[key] = sample{rx: rawRx, tx: rawTx, at: time.Now().UTC()}
 			}
 			if !up {
 				lastErr = err.Error()
