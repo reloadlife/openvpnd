@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -139,11 +140,16 @@ func (b *HostBackend) EnsureInstance(ctx context.Context, d DesiredInstance) err
 	}
 
 	st, ok := b.managed[d.Name]
+	if !ok {
+		st = &procState{}
+		b.managed[d.Name] = st
+		ok = true
+	}
 	if !d.Enabled {
-		if ok {
-			_ = b.stopLocked(ctx, st)
-			st.desired = d
-		}
+		_ = b.stopLocked(ctx, st)
+		// also reap any orphan still bound to this conf
+		_ = b.killOrphansForConf(d.ConfPath, d.PIDPath)
+		st.desired = d
 		return nil
 	}
 
@@ -151,10 +157,32 @@ func (b *HostBackend) EnsureInstance(ctx context.Context, d DesiredInstance) err
 		return fmt.Errorf("binary path empty for instance %s", d.Name)
 	}
 
-	needStart := !ok || st.pid == 0 || !processAlive(st.pid)
-	needRestart := ok && (st.desired.ConfHash != d.ConfHash || st.desired.BinaryPath != d.BinaryPath)
+	// Refresh tracking from pid file / conf match if our handle went stale.
+	if st.pid > 0 && !processAlive(st.pid) {
+		st.pid = 0
+		st.cmd = nil
+	}
+	if st.pid == 0 {
+		if pid := b.findRunningPID(d); pid > 0 {
+			st.pid = pid
+		}
+	}
 
-	if needRestart && ok && st.pid > 0 {
+	needRestart := st.desired.ConfHash != "" && (st.desired.ConfHash != d.ConfHash || st.desired.BinaryPath != d.BinaryPath)
+	needStart := st.pid == 0 || !processAlive(st.pid)
+
+	// If process is up and mgmt answers, keep it (unless conf/binary changed).
+	if !needStart && !needRestart && d.MgmtPath != "" {
+		if mgmt, err := dialMgmt(d.MgmtPath); err == nil {
+			_ = mgmt.Close()
+			st.desired = d
+			return nil
+		}
+		// Process up but mgmt path orphaned (classic thrash side-effect). Restart cleanly.
+		needRestart = true
+	}
+
+	if needRestart && st.pid > 0 && processAlive(st.pid) {
 		if d.AllowHooks && d.PreDown != "" {
 			_ = runHook(ctx, d.PreDown)
 		}
@@ -165,10 +193,6 @@ func (b *HostBackend) EnsureInstance(ctx context.Context, d DesiredInstance) err
 		needStart = true
 	}
 
-	if st == nil {
-		st = &procState{}
-		b.managed[d.Name] = st
-	}
 	st.desired = d
 
 	if needStart {
@@ -177,18 +201,26 @@ func (b *HostBackend) EnsureInstance(ctx context.Context, d DesiredInstance) err
 				return fmt.Errorf("pre_up: %w", err)
 			}
 		}
-		// ensure runtime tmp (openvpn tmp-dir) and remove stale mgmt socket
+		// Ensure no leftover process still holds port/mgmt before we bind a new one.
+		_ = b.killOrphansForConf(d.ConfPath, d.PIDPath)
 		if d.PIDPath != "" {
 			_ = os.MkdirAll(filepath.Join(filepath.Dir(d.PIDPath), "tmp"), 0o755)
+			_ = os.Remove(d.PIDPath)
 		}
-		_ = os.Remove(d.MgmtPath)
-		cmd := exec.CommandContext(ctx, d.BinaryPath, "--config", d.ConfPath)
+		if d.MgmtPath != "" {
+			_ = os.Remove(d.MgmtPath)
+		}
+
+		// Long-lived process: do NOT use CommandContext — reconcile ctx must not kill openvpn.
+		cmd := exec.Command(d.BinaryPath, "--config", d.ConfPath)
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		if len(d.Env) > 0 {
 			cmd.Env = append(os.Environ(), d.Env...)
 		}
-		// capture logs to runtime dir
 		logPath := filepath.Join(filepath.Dir(d.PIDPath), d.Name+".log")
+		if d.PIDPath == "" {
+			logPath = filepath.Join(b.opts.RuntimeDir, d.Name+".log")
+		}
 		logF, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 		if err != nil {
 			return err
@@ -200,8 +232,8 @@ func (b *HostBackend) EnsureInstance(ctx context.Context, d DesiredInstance) err
 			return fmt.Errorf("start openvpn: %w", err)
 		}
 		st.cmd = cmd
-		st.pid = cmd.Process.Pid
-		// wait briefly for pid file / process settle
+		childPID := cmd.Process.Pid
+		st.pid = childPID
 		go func() {
 			_ = cmd.Wait()
 			_ = logF.Close()
@@ -212,32 +244,142 @@ func (b *HostBackend) EnsureInstance(ctx context.Context, d DesiredInstance) err
 			}
 			b.mu.Unlock()
 		}()
-		// prefer pid file if written; wait for management socket (up to ~3s)
-		deadline := time.Now().Add(3 * time.Second)
+
+		// Wait until management is dialable (file existence alone is not enough —
+		// thrash can leave a dead sock path while an older process holds the real listen).
+		deadline := time.Now().Add(5 * time.Second)
+		var lastDial error
 		for time.Now().Before(deadline) {
-			if pid := readPIDFile(d.PIDPath); pid > 0 {
-				st.pid = pid
-			}
-			if d.MgmtPath != "" {
-				if _, err := os.Stat(d.MgmtPath); err == nil {
-					break
+			// Never replace childPID with a stale pid-file value from a previous run.
+			if pid := readPIDFile(d.PIDPath); pid > 0 && processAlive(pid) {
+				// Prefer pidfile only when it matches our child or child already reaped/replaced.
+				if pid == childPID || !processAlive(childPID) {
+					st.pid = pid
 				}
 			}
-			// process died early — surface last log lines
-			if !processAlive(st.pid) {
+			if !processAlive(childPID) && (st.pid == 0 || !processAlive(st.pid)) {
 				tail := tailFile(logPath, 8)
 				if tail != "" {
 					return fmt.Errorf("openvpn exited during start:\n%s", tail)
 				}
 				return fmt.Errorf("openvpn exited during start (see %s)", logPath)
 			}
+			if d.MgmtPath != "" {
+				if mgmt, err := dialMgmt(d.MgmtPath); err == nil {
+					_ = mgmt.Close()
+					lastDial = nil
+					break
+				} else {
+					lastDial = err
+				}
+			} else if processAlive(st.pid) {
+				break
+			}
 			time.Sleep(100 * time.Millisecond)
+		}
+		if d.MgmtPath != "" && lastDial != nil {
+			// Process may still be up; surface dial error so reconciler records last_error.
+			// Keep tracking pid so we do not thrash-start another copy on the next tick.
+			if processAlive(st.pid) || processAlive(childPID) {
+				if processAlive(childPID) {
+					st.pid = childPID
+				}
+				return fmt.Errorf("openvpn started (pid %d) but management not ready: %w", st.pid, lastDial)
+			}
+			tail := tailFile(logPath, 8)
+			if tail != "" {
+				return fmt.Errorf("openvpn exited during start:\n%s", tail)
+			}
+			return fmt.Errorf("openvpn exited during start (see %s)", logPath)
 		}
 		if d.AllowHooks && d.PostUp != "" {
 			_ = runHook(ctx, d.PostUp)
 		}
 	}
 	return nil
+}
+
+// findRunningPID locates an already-running openvpn for this instance (pidfile or /proc).
+func (b *HostBackend) findRunningPID(d DesiredInstance) int {
+	if pid := readPIDFile(d.PIDPath); pid > 0 && processAlive(pid) && processMatchesConf(pid, d.ConfPath) {
+		return pid
+	}
+	if pid := findPIDByConf(d.ConfPath); pid > 0 {
+		return pid
+	}
+	return 0
+}
+
+// killOrphansForConf stops any openvpn still running with this conf (and pidfile target).
+func (b *HostBackend) killOrphansForConf(confPath, pidPath string) error {
+	seen := map[int]struct{}{}
+	if pid := readPIDFile(pidPath); pid > 0 {
+		seen[pid] = struct{}{}
+	}
+	if pid := findPIDByConf(confPath); pid > 0 {
+		seen[pid] = struct{}{}
+	}
+	for pid := range seen {
+		if !processAlive(pid) {
+			continue
+		}
+		_ = syscall.Kill(pid, syscall.SIGTERM)
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			if !processAlive(pid) {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		if processAlive(pid) {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	return nil
+}
+
+// findPIDByConf walks /proc for openvpn --config <confPath>.
+func findPIDByConf(confPath string) int {
+	if confPath == "" {
+		return 0
+	}
+	ents, err := os.ReadDir("/proc")
+	if err != nil {
+		return 0
+	}
+	for _, e := range ents {
+		if !e.IsDir() {
+			continue
+		}
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil || pid <= 1 {
+			continue
+		}
+		if processMatchesConf(pid, confPath) {
+			return pid
+		}
+	}
+	return 0
+}
+
+func processMatchesConf(pid int, confPath string) bool {
+	if pid <= 0 || confPath == "" {
+		return false
+	}
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if err != nil || len(b) == 0 {
+		return false
+	}
+	// cmdline is NUL-separated
+	parts := strings.Split(string(b), "\x00")
+	joined := strings.Join(parts, " ")
+	if !strings.Contains(joined, confPath) {
+		return false
+	}
+	// require openvpn-ish binary name
+	low := strings.ToLower(joined)
+	return strings.Contains(low, "openvpn")
 }
 
 func tailFile(path string, n int) string {
@@ -269,11 +411,24 @@ func (b *HostBackend) StopInstance(ctx context.Context, name string) error {
 
 func (b *HostBackend) stopLocked(ctx context.Context, st *procState) error {
 	_ = ctx
-	pid := st.pid
-	if pid <= 0 {
-		pid = readPIDFile(st.desired.PIDPath)
+	pids := map[int]struct{}{}
+	if st.pid > 0 {
+		pids[st.pid] = struct{}{}
 	}
-	if pid > 0 && processAlive(pid) {
+	if pid := readPIDFile(st.desired.PIDPath); pid > 0 {
+		pids[pid] = struct{}{}
+	}
+	if st.desired.ConfPath != "" {
+		if pid := findPIDByConf(st.desired.ConfPath); pid > 0 {
+			pids[pid] = struct{}{}
+		}
+	}
+	for pid := range pids {
+		if pid <= 0 || !processAlive(pid) {
+			continue
+		}
+		// Kill process group when we started with Setpgid.
+		_ = syscall.Kill(-pid, syscall.SIGTERM)
 		_ = syscall.Kill(pid, syscall.SIGTERM)
 		deadline := time.Now().Add(5 * time.Second)
 		for time.Now().Before(deadline) {
@@ -283,6 +438,7 @@ func (b *HostBackend) stopLocked(ctx context.Context, st *procState) error {
 			time.Sleep(50 * time.Millisecond)
 		}
 		if processAlive(pid) {
+			_ = syscall.Kill(-pid, syscall.SIGKILL)
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 		}
 	}
@@ -324,7 +480,20 @@ func (b *HostBackend) Management(ctx context.Context, name string) (MgmtClient, 
 }
 
 func (b *HostBackend) connectMgmt(path string) (MgmtClient, error) {
-	return dialMgmt(path)
+	if path == "" {
+		return nil, fmt.Errorf("mgmt dial: empty path")
+	}
+	var last error
+	// Brief retry: socket can appear a moment before listen(), or reconciler can race start.
+	for i := 0; i < 5; i++ {
+		mgmt, err := dialMgmt(path)
+		if err == nil {
+			return mgmt, nil
+		}
+		last = err
+		time.Sleep(50 * time.Millisecond)
+	}
+	return nil, last
 }
 
 func (b *HostBackend) WriteFile(path, content string) error {
