@@ -34,7 +34,12 @@ test-api:
 
 # OpenVPN conf emission + feature presets (tier A matrix)
 test-feature:
-	go test -count=1 ./internal/confgen/ ./internal/features/ -run 'TestTierA|TestRender|TestEveryBuiltin|TestExpand|TestCCD'
+	go test -count=1 ./internal/confgen/ ./internal/features/ -run 'TestTierA|TestRender|TestEveryBuiltin|TestExpand|TestCCD|TestRoadmap|TestBuiltin'
+
+# Master verification: all manageability surfaces + supporting packages
+test-verify:
+	go test -count=1 ./internal/api/ -run 'TestAllManageabilityFeatures' -v
+	go test -count=1 ./internal/confgen/ ./internal/features/ ./internal/adopt/ ./internal/bandwidth/ ./internal/confimport/ ./internal/update/ ./internal/pki/ ./internal/db/ ./internal/reconcile/ ./internal/config/ ./internal/tui/ ./internal/instance/ ./internal/netutil/
 
 # Host OpenVPN + reconciler integration (skips if openvpn missing / no CAP)
 test-integration:

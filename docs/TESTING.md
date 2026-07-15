@@ -18,9 +18,19 @@ make test-api          # API + PKI + profile integration-style tests
 make test-race         # full with -race
 make cover             # total coverage summary
 make cover-html        # coverage.html for browser
-make test-feature      # confgen + features + profile only (OpenVPN surface)
+make test-feature      # confgen + features matrices
+make test-verify       # master manageability e2e + supporting suites
 make test-integration  # host OpenVPN backend (skips if openvpn/CAP missing)
 ```
+
+### Master feature e2e
+
+`TestAllManageabilityFeatures` (`internal/api/features_e2e_test.go`) verifies:
+
+- builtin feature presets · CA/server issue · client one-shot (cert, profile link, iroutes, CCD ACL, bandwidth)
+- CRL revoke / rebuild / renew · `crl-verify` · bridge mode · auth-user-pass-verify
+- import inline PEMs · adopt from disk · management status/kill/signal + whitelist
+- custom plugins + multi-binary pin
 
 ## Suites
 
