@@ -45,10 +45,19 @@ pki_dir/
 | GET/POST | `/v1/pki/certs` | List / issue leaf |
 | GET | `/v1/pki/certs/{id}` | Get cert record |
 | GET/POST | `/v1/pki/tls-crypt` | List / generate tls-crypt |
-| POST | `/v1/instances/{name}/issue-server-cert` | Issue + wire instance paths |
+| POST | `/v1/pki/certs/{id}/revoke` | Revoke leaf + rebuild CA CRL |
+| POST | `/v1/pki/certs/{id}/renew` | Re-issue same CN (new key/serial) |
+| POST | `/v1/pki/cas/{name}/rebuild-crl` | Rebuild `ca.crl` from revoked list |
+| POST | `/v1/instances/{name}/issue-server-cert` | Issue + wire instance paths (+ CRL if any) |
 | POST | `/v1/instances/{name}/clients/{cn}/issue-cert` | Issue + wire client paths |
 
 Client create accepts `"issue_cert": true` (+ optional `ca_name`).
+
+## CRL
+
+- On revoke, openvpnd writes `pki_dir/cas/<name>/ca.crl` and sets `cas.crl_path`.
+- Server instances using that CA get `pki_crl_path` and conf emits `crl-verify <path>`.
+- TUI: **PKI** tab → select cert → `r` revoke, `R` rebuild CRL.
 
 ## Conf generation
 

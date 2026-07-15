@@ -16,20 +16,25 @@ import (
 const (
 	tabInstances = 0
 	tabClients   = 1
-	tabBinaries  = 2
-	tabStats     = 3
-	tabEvents    = 4
+	tabPKI       = 2
+	tabBinaries  = 3
+	tabStats     = 4
+	tabEvents    = 5
+	tabCount     = 6
 
-	modeList         = 0
-	modeInstForm     = 1
-	modeClientForm   = 2
-	modeBinaryForm   = 3
-	modeInstDetail   = 4
-	modeClientDetail = 5
-	modeConfView     = 6
-	modeProfileLink  = 7
-	modeConfirm      = 8
-	modeFilePick     = 9
+	modeList          = 0
+	modeInstForm      = 1
+	modeClientForm    = 2
+	modeBinaryForm    = 3
+	modeInstDetail    = 4
+	modeClientDetail  = 5
+	modeConfView      = 6
+	modeProfileLink   = 7
+	modeConfirm       = 8
+	modeFilePick      = 9
+	modeCAForm        = 10
+	modeIssueCertForm = 11
+	modePKIDetail     = 12
 )
 
 type confirmKind int
@@ -39,7 +44,11 @@ const (
 	confirmDelInst
 	confirmDelClient
 	confirmDelBinary
+	confirmRevokeCert
 )
+
+// filePickKey special values (not form fields)
+const filePickImportInstance = "__import_instance__"
 
 type rootModel struct {
 	cfg    Config
@@ -53,7 +62,16 @@ type rootModel struct {
 	binaries  []pkgapi.Binary
 	stats     pkgapi.Stats
 	events    []pkgapi.Event
+	cas       []pkgapi.CA
+	certs     []pkgapi.Certificate
+	tlsCrypts []pkgapi.TLSCryptKey
 	cursor    int
+
+	// PKI list selection: "ca" | "cert" sections; pkiFilterCA filters certs
+	pkiSection  string // "cas" | "certs"
+	pkiFilterCA string
+	detailCA    *pkgapi.CA
+	detailCert  *pkgapi.Certificate
 
 	err    string
 	status string
@@ -68,7 +86,7 @@ type rootModel struct {
 
 	// file picker overlay (returns to formReturnMode)
 	filePick       filepicker.Model
-	filePickKey    string // form field key to fill
+	filePickKey    string // form field key to fill, or special import key
 	formReturnMode int
 
 	detailInst   *pkgapi.Instance
@@ -85,7 +103,7 @@ type rootModel struct {
 }
 
 func newRootModel(cfg Config) rootModel {
-	return rootModel{cfg: cfg, status: "connecting…", mode: modeList}
+	return rootModel{cfg: cfg, status: "connecting…", mode: modeList, pkiSection: "cas"}
 }
 
 func (m rootModel) beginFetch() (rootModel, tea.Cmd) {
@@ -116,7 +134,7 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		if m.mode == modeInstForm || m.mode == modeClientForm || m.mode == modeBinaryForm {
+		if m.isFormMode() {
 			m.form.SetSize(msg.Width, m.formAreaHeight())
 		}
 		if m.mode == modeFilePick {
@@ -125,7 +143,7 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
-		if m.mode == modeList || m.mode == modeInstDetail || m.mode == modeClientDetail {
+		if m.mode == modeList || m.mode == modeInstDetail || m.mode == modeClientDetail || m.mode == modePKIDetail {
 			m, fetch := m.beginFetch()
 			return m, tea.Batch(fetch, tickCmd(m.cfg.RefreshInterval))
 		}
@@ -151,6 +169,9 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.binaries = msg.binaries
 			m.stats = msg.stats
 			m.events = msg.events
+			m.cas = msg.cas
+			m.certs = msg.certs
+			m.tlsCrypts = msg.tlsCrypts
 			m.status = "ok"
 			if m.cursor >= m.rowCount() {
 				m.cursor = max(0, m.rowCount()-1)
@@ -244,7 +265,7 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == modeFilePick {
 			return m.handleFilePickKey(msg)
 		}
-		if m.mode == modeInstForm || m.mode == modeClientForm || m.mode == modeBinaryForm {
+		if m.isFormMode() {
 			return m.handleFormKeyAll(msg)
 		}
 		return m.handleKey(msg)
@@ -260,6 +281,11 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 	return m, nil
+}
+
+func (m rootModel) isFormMode() bool {
+	return m.mode == modeInstForm || m.mode == modeClientForm || m.mode == modeBinaryForm ||
+		m.mode == modeCAForm || m.mode == modeIssueCertForm
 }
 
 func (m *rootModel) refreshDetailPtrs() {
@@ -282,6 +308,37 @@ func (m *rootModel) refreshDetailPtrs() {
 			}
 		}
 	}
+	if m.detailCA != nil {
+		for i := range m.cas {
+			if m.cas[i].Name == m.detailCA.Name {
+				ca := m.cas[i]
+				m.detailCA = &ca
+				break
+			}
+		}
+	}
+	if m.detailCert != nil {
+		for i := range m.certs {
+			if m.certs[i].ID == m.detailCert.ID {
+				cert := m.certs[i]
+				m.detailCert = &cert
+				break
+			}
+		}
+	}
+}
+
+func (m rootModel) filteredCerts() []pkgapi.Certificate {
+	if m.pkiFilterCA == "" {
+		return m.certs
+	}
+	var out []pkgapi.Certificate
+	for _, c := range m.certs {
+		if c.CAName == m.pkiFilterCA {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func (m rootModel) rowCount() int {
@@ -290,6 +347,11 @@ func (m rootModel) rowCount() int {
 		return len(m.instances)
 	case tabClients:
 		return len(m.clients)
+	case tabPKI:
+		if m.pkiSection == "certs" {
+			return len(m.filteredCerts())
+		}
+		return len(m.cas)
 	case tabBinaries:
 		return len(m.binaries)
 	case tabEvents:
@@ -311,12 +373,16 @@ func (m rootModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleInstDetailKey(key)
 	case modeClientDetail:
 		return m.handleClientDetailKey(key)
+	case modePKIDetail:
+		return m.handlePKIDetailKey(key)
 	case modeConfView, modeProfileLink:
 		if key == "esc" || key == "q" || key == "enter" {
 			if m.detailClient != nil {
 				m.mode = modeClientDetail
 			} else if m.detailInst != nil {
 				m.mode = modeInstDetail
+			} else if m.detailCA != nil || m.detailCert != nil {
+				m.mode = modePKIDetail
 			} else {
 				m.mode = modeList
 			}
@@ -359,10 +425,19 @@ func (m rootModel) handleConfirm(key string) (tea.Model, tea.Cmd) {
 			m.confirm = confirmNone
 			m.mode = modeList
 			return m.startMutate(doDeleteBinary(m.cfg.Client, name))
+		case confirmRevokeCert:
+			id, _ := parseIntField(m.confirmArg)
+			m.confirm = confirmNone
+			m.mode = modeList
+			return m.startMutate(doRevokeCert(m.cfg.Client, int64(id), m.confirmArg2))
 		}
 	case "n", "N", "esc":
 		m.confirm = confirmNone
-		m.mode = modeList
+		if m.detailCert != nil || m.detailCA != nil {
+			m.mode = modePKIDetail
+		} else {
+			m.mode = modeList
+		}
 	}
 	return m, nil
 }
@@ -390,6 +465,10 @@ func (m rootModel) handleFormKeyAll(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.submitClientForm()
 		case modeBinaryForm:
 			return m.submitBinaryForm()
+		case modeCAForm:
+			return m.submitCAForm()
+		case modeIssueCertForm:
+			return m.submitIssueCertForm()
 		}
 	case "ctrl+o":
 		if m.form.Focused().Kind == fieldFile {
@@ -477,6 +556,18 @@ func (m rootModel) applyPickedFile(path string) (tea.Model, tea.Cmd) {
 	if abs, err := filepath.Abs(path); err == nil {
 		path = abs
 	}
+
+	// Instance import from Instances tab (key I)
+	if key == filePickImportInstance {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			m.err = "import read: " + err.Error()
+			m.mode = modeList
+			return m, nil
+		}
+		return m.startMutate(doImportInstance(m.cfg.Client, string(data), path))
+	}
+
 	m.form.SetValue(key, path)
 
 	// Auto-import client .ovpn when picking profile
@@ -545,6 +636,12 @@ func (m rootModel) applyPickedFile(path string) (tea.Model, tea.Cmd) {
 }
 
 func (m rootModel) handleListKey(key string) (tea.Model, tea.Cmd) {
+	// PKI-specific keys first
+	if m.tab == tabPKI {
+		if handled, model, cmd := m.handlePKIListKey(key); handled {
+			return model, cmd
+		}
+	}
 	switch key {
 	case "q":
 		return m, tea.Quit
@@ -555,19 +652,25 @@ func (m rootModel) handleListKey(key string) (tea.Model, tea.Cmd) {
 		m.tab = tabClients
 		m.cursor = 0
 	case "3":
+		m.tab = tabPKI
+		m.cursor = 0
+		if m.pkiSection == "" {
+			m.pkiSection = "cas"
+		}
+	case "4":
 		m.tab = tabBinaries
 		m.cursor = 0
-	case "4":
+	case "5":
 		m.tab = tabStats
 		m.cursor = 0
-	case "5":
+	case "6":
 		m.tab = tabEvents
 		m.cursor = 0
 	case "tab":
-		m.tab = (m.tab + 1) % 5
+		m.tab = (m.tab + 1) % tabCount
 		m.cursor = 0
 	case "shift+tab":
-		m.tab = (m.tab + 4) % 5
+		m.tab = (m.tab + tabCount - 1) % tabCount
 		m.cursor = 0
 	case "j", "down":
 		if m.cursor < m.rowCount()-1 {
@@ -588,6 +691,10 @@ func (m rootModel) handleListKey(key string) (tea.Model, tea.Cmd) {
 		return m.startMutate(doReconcile(m.cfg.Client))
 	case "n":
 		return m.openCreateForm()
+	case "I":
+		if m.tab == tabInstances {
+			return m.openInstanceImportPicker()
+		}
 	case "enter", "l":
 		return m.openDetail()
 	case "u":
@@ -602,6 +709,123 @@ func (m rootModel) handleListKey(key string) (tea.Model, tea.Cmd) {
 		return m.listSuspend(false)
 	}
 	return m, nil
+}
+
+func (m rootModel) handlePKIListKey(key string) (bool, tea.Model, tea.Cmd) {
+	switch key {
+	case "c":
+		m.pkiSection = "cas"
+		m.cursor = 0
+		return true, m, nil
+	case "t":
+		m.pkiSection = "certs"
+		m.cursor = 0
+		return true, m, nil
+	case "f":
+		// filter certs by selected CA (when on CAs section)
+		if m.pkiSection == "cas" && m.cursor >= 0 && m.cursor < len(m.cas) {
+			m.pkiFilterCA = m.cas[m.cursor].Name
+			m.pkiSection = "certs"
+			m.cursor = 0
+			return true, m, nil
+		}
+		// clear filter when already on certs
+		if m.pkiSection == "certs" {
+			m.pkiFilterCA = ""
+			m.cursor = 0
+			return true, m, nil
+		}
+	case "n":
+		m.form = newForm("Create CA", caCreateFields(), map[string]string{"name": "default"})
+		m.form.note = "Creates a managed CA under openvpn.pki_dir."
+		m.form.SetSize(m.width, m.formAreaHeight())
+		m.mode = modeCAForm
+		return true, m, nil
+	case "i":
+		names := m.caNames()
+		vals := map[string]string{"kind": "client"}
+		if len(names) == 1 {
+			vals["ca_name"] = names[0]
+		} else if m.pkiFilterCA != "" {
+			vals["ca_name"] = m.pkiFilterCA
+		} else if m.pkiSection == "cas" && m.cursor >= 0 && m.cursor < len(m.cas) {
+			vals["ca_name"] = m.cas[m.cursor].Name
+		}
+		m.form = newForm("Issue certificate", issueCertFields(names), vals)
+		m.form.note = "Issues a leaf cert under the selected CA."
+		m.form.SetSize(m.width, m.formAreaHeight())
+		m.mode = modeIssueCertForm
+		return true, m, nil
+	case "r":
+		if m.pkiSection != "certs" {
+			return false, m, nil
+		}
+		certs := m.filteredCerts()
+		if m.cursor < 0 || m.cursor >= len(certs) {
+			return true, m, nil
+		}
+		cert := certs[m.cursor]
+		if cert.Revoked {
+			m.err = "cert already revoked"
+			return true, m, nil
+		}
+		m.confirm = confirmRevokeCert
+		m.confirmArg = fmt.Sprintf("%d", cert.ID)
+		m.confirmArg2 = "unspecified"
+		m.confirmText = fmt.Sprintf("Revoke cert #%d %s (%s)? [y/n]", cert.ID, cert.CommonName, cert.Kind)
+		m.mode = modeConfirm
+		return true, m, nil
+	case "R":
+		caName := m.pkiFilterCA
+		if caName == "" && m.pkiSection == "cas" && m.cursor >= 0 && m.cursor < len(m.cas) {
+			caName = m.cas[m.cursor].Name
+		}
+		if caName == "" && len(m.cas) == 1 {
+			caName = m.cas[0].Name
+		}
+		if caName == "" {
+			m.err = "select a CA (or filter) to rebuild CRL"
+			return true, m, nil
+		}
+		mod, cmd := m.startMutate(doRebuildCRL(m.cfg.Client, caName))
+		return true, mod, cmd
+	}
+	return false, m, nil
+}
+
+func (m rootModel) caNames() []string {
+	out := make([]string, 0, len(m.cas))
+	for _, c := range m.cas {
+		out = append(out, c.Name)
+	}
+	return out
+}
+
+func (m rootModel) openInstanceImportPicker() (tea.Model, tea.Cmd) {
+	fp := filepicker.New()
+	fp.FileAllowed = true
+	fp.DirAllowed = false
+	fp.ShowHidden = false
+	fp.ShowPermissions = false
+	fp.ShowSize = true
+	fp.AutoHeight = false
+	fp.SetHeight(max(8, m.formAreaHeight()-4))
+	fp.AllowedTypes = []string{".conf", ".ovpn"}
+	if wd, err := os.Getwd(); err == nil {
+		fp.CurrentDirectory = wd
+	} else if home, err := os.UserHomeDir(); err == nil {
+		fp.CurrentDirectory = home
+	} else {
+		fp.CurrentDirectory = "/"
+	}
+	if abs, err := filepath.Abs(fp.CurrentDirectory); err == nil {
+		fp.CurrentDirectory = abs
+	}
+	m.filePick = fp
+	m.filePickKey = filePickImportInstance
+	m.formReturnMode = modeList
+	m.mode = modeFilePick
+	return m, m.filePick.Init()
 }
 
 func (m rootModel) openCreateForm() (tea.Model, tea.Cmd) {
@@ -631,6 +855,12 @@ func (m rootModel) openCreateForm() (tea.Model, tea.Cmd) {
 		m.form.note = "Enter a username (CN). We auto-issue a cert, pick a free IP, and show a QR install link."
 		m.form.SetSize(m.width, m.formAreaHeight())
 		m.mode = modeClientForm
+	case tabPKI:
+		// same as n on PKI list
+		m.form = newForm("Create CA", caCreateFields(), map[string]string{"name": "default"})
+		m.form.note = "Creates a managed CA under openvpn.pki_dir."
+		m.form.SetSize(m.width, m.formAreaHeight())
+		m.mode = modeCAForm
 	case tabBinaries:
 		m.form = newForm("Register binary", binaryCreateFields(), nil)
 		m.form.SetSize(m.width, m.formAreaHeight())
@@ -658,6 +888,8 @@ func (m rootModel) openDetail() (tea.Model, tea.Cmd) {
 		inst := m.instances[m.cursor]
 		m.detailInst = &inst
 		m.detailClient = nil
+		m.detailCA = nil
+		m.detailCert = nil
 		m.mode = modeInstDetail
 	case tabClients:
 		if m.cursor < 0 || m.cursor >= len(m.clients) {
@@ -665,7 +897,33 @@ func (m rootModel) openDetail() (tea.Model, tea.Cmd) {
 		}
 		cl := m.clients[m.cursor]
 		m.detailClient = &cl
+		m.detailInst = nil
+		m.detailCA = nil
+		m.detailCert = nil
 		m.mode = modeClientDetail
+	case tabPKI:
+		if m.pkiSection == "certs" {
+			certs := m.filteredCerts()
+			if m.cursor < 0 || m.cursor >= len(certs) {
+				return m, nil
+			}
+			cert := certs[m.cursor]
+			m.detailCert = &cert
+			m.detailCA = nil
+			m.detailInst = nil
+			m.detailClient = nil
+			m.mode = modePKIDetail
+		} else {
+			if m.cursor < 0 || m.cursor >= len(m.cas) {
+				return m, nil
+			}
+			ca := m.cas[m.cursor]
+			m.detailCA = &ca
+			m.detailCert = nil
+			m.detailInst = nil
+			m.detailClient = nil
+			m.mode = modePKIDetail
+		}
 	case tabBinaries:
 		// no detail — show in list
 	}
@@ -786,12 +1044,71 @@ func (m rootModel) handleClientDetailKey(key string) (tea.Model, tea.Cmd) {
 	case "L", "p":
 		m.busy = true
 		return m, doProfileLink(m.cfg.Client, cl.InstanceName, cl.CommonName)
+	case "i":
+		// Issue client cert when paths missing
+		if cl.ClientCertPath != "" && cl.ClientKeyPath != "" {
+			m.err = "client already has cert paths — delete/recreate or use API to re-issue"
+			return m, nil
+		}
+		return m.startMutate(doIssueClientCert(m.cfg.Client, cl.InstanceName, cl.CommonName))
 	case "D":
 		m.confirm = confirmDelClient
 		m.confirmArg = cl.InstanceName
 		m.confirmArg2 = cl.CommonName
 		m.confirmText = "Delete client " + cl.CommonName + "? [y/n]"
 		m.mode = modeConfirm
+	}
+	return m, nil
+}
+
+func (m rootModel) handlePKIDetailKey(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "esc", "q", "h":
+		m.mode = modeList
+		m.detailCA = nil
+		m.detailCert = nil
+	case "r":
+		if m.detailCert == nil {
+			return m, nil
+		}
+		if m.detailCert.Revoked {
+			m.err = "cert already revoked"
+			return m, nil
+		}
+		m.confirm = confirmRevokeCert
+		m.confirmArg = fmt.Sprintf("%d", m.detailCert.ID)
+		m.confirmArg2 = "unspecified"
+		m.confirmText = fmt.Sprintf("Revoke cert #%d %s? [y/n]", m.detailCert.ID, m.detailCert.CommonName)
+		m.mode = modeConfirm
+	case "R":
+		caName := ""
+		if m.detailCA != nil {
+			caName = m.detailCA.Name
+		} else if m.detailCert != nil {
+			caName = m.detailCert.CAName
+		}
+		if caName == "" {
+			return m, nil
+		}
+		return m.startMutate(doRebuildCRL(m.cfg.Client, caName))
+	case "i":
+		// issue from CA detail
+		names := m.caNames()
+		vals := map[string]string{"kind": "client"}
+		if m.detailCA != nil {
+			vals["ca_name"] = m.detailCA.Name
+		}
+		m.form = newForm("Issue certificate", issueCertFields(names), vals)
+		m.form.SetSize(m.width, m.formAreaHeight())
+		m.mode = modeIssueCertForm
+	case "f":
+		if m.detailCA != nil {
+			m.pkiFilterCA = m.detailCA.Name
+			m.pkiSection = "certs"
+			m.cursor = 0
+			m.mode = modeList
+			m.detailCA = nil
+		}
 	}
 	return m, nil
 }
@@ -870,6 +1187,7 @@ func (m rootModel) submitClientForm() (tea.Model, tea.Cmd) {
 	mint := truthy(v["mint_link"])
 	req := pkgapi.ClientCreateRequest{
 		CommonName: cn, Name: v["name"], StaticIP: v["static_ip"], Notes: v["notes"],
+		IRoutes:        splitCSV(v["iroutes"]),
 		ClientCertPath: v["cert_path"], ClientKeyPath: v["key_path"],
 		IssueCert: &issue, MintProfileLink: mint,
 		ProfileLinkTTL: v["link_ttl"], ProfileLinkNote: v["notes"],
@@ -895,6 +1213,39 @@ func (m rootModel) submitBinaryForm() (tea.Model, tea.Cmd) {
 	}
 	return m.startMutate(doCreateBinary(m.cfg.Client, pkgapi.BinaryCreateRequest{
 		Name: v["name"], Path: v["path"], Notes: v["notes"],
+	}))
+}
+
+func (m rootModel) submitCAForm() (tea.Model, tea.Cmd) {
+	v := m.form.Values()
+	cn := strings.TrimSpace(v["common_name"])
+	if cn == "" {
+		m.form.err = "common_name required"
+		return m, nil
+	}
+	name := strings.TrimSpace(v["name"])
+	if name == "" {
+		name = "default"
+	}
+	return m.startMutate(doCreateCA(m.cfg.Client, pkgapi.CreateCARequest{
+		Name: name, CommonName: cn, Org: strings.TrimSpace(v["org"]),
+	}))
+}
+
+func (m rootModel) submitIssueCertForm() (tea.Model, tea.Cmd) {
+	v := m.form.Values()
+	ca := strings.TrimSpace(v["ca_name"])
+	cn := strings.TrimSpace(v["common_name"])
+	kind := strings.TrimSpace(v["kind"])
+	if ca == "" || strings.HasPrefix(ca, "(") || cn == "" {
+		m.form.err = "CA and common_name required"
+		return m, nil
+	}
+	if kind == "" {
+		kind = "client"
+	}
+	return m.startMutate(doIssueCert(m.cfg.Client, pkgapi.IssueCertRequest{
+		CAName: ca, Kind: kind, CommonName: cn,
 	}))
 }
 
@@ -939,12 +1290,16 @@ func (m rootModel) View() string {
 			warnStyle.Render("Confirm") + "\n\n" + m.confirmText + "\n\n" +
 				helpStyle.Render("[y] yes   [n / esc] cancel"),
 		)
-	case modeInstForm, modeClientForm, modeBinaryForm:
+	case modeInstForm, modeClientForm, modeBinaryForm, modeCAForm, modeIssueCertForm:
 		m.form.SetSize(w, mainH)
 		mid = m.form.View()
 	case modeFilePick:
+		title := "Select file → " + m.filePickKey
+		if m.filePickKey == filePickImportInstance {
+			title = "Import instance · pick .conf / .ovpn"
+		}
 		var b strings.Builder
-		b.WriteString(titleStyle.Render("Select file → " + m.filePickKey))
+		b.WriteString(titleStyle.Render(title))
 		b.WriteString("\n")
 		b.WriteString(dimStyle.Render(m.filePick.CurrentDirectory))
 		b.WriteString("\n\n")
@@ -956,6 +1311,8 @@ func (m rootModel) View() string {
 		mid = fillHeight(m.viewInstDetail(w, mainH), w, mainH)
 	case modeClientDetail:
 		mid = fillHeight(m.viewClientDetail(w, mainH), w, mainH)
+	case modePKIDetail:
+		mid = fillHeight(m.viewPKIDetail(w, mainH), w, mainH)
 	case modeConfView:
 		mid = fillHeight(m.viewConf(w, mainH), w, mainH)
 	case modeProfileLink:
@@ -974,6 +1331,8 @@ func (m rootModel) View() string {
 			b.WriteString(m.viewInstanceList(w))
 		case tabClients:
 			b.WriteString(m.viewClientList(w))
+		case tabPKI:
+			b.WriteString(m.viewPKIList(w, mainH))
 		case tabBinaries:
 			b.WriteString(m.viewBinaryList(w))
 		case tabStats:
@@ -990,7 +1349,7 @@ func (m rootModel) View() string {
 
 func (m rootModel) chromeHelp() string {
 	switch m.mode {
-	case modeInstForm, modeClientForm, modeBinaryForm:
+	case modeInstForm, modeClientForm, modeBinaryForm, modeCAForm, modeIssueCertForm:
 		return "tab/↑↓ fields  ·  ←/→ role & toggles  ·  space/ctrl+o browse file  ·  enter save  ·  esc cancel"
 	case modeFilePick:
 		return "j/k navigate  ·  enter select file  ·  h parent dir  ·  ctrl+g cancel"
@@ -999,7 +1358,9 @@ func (m rootModel) chromeHelp() string {
 	case modeInstDetail:
 		return "u/d up/down  ·  r restart  ·  e export  ·  n new client  ·  D delete  ·  esc back  ·  q quit"
 	case modeClientDetail:
-		return "s/S suspend/resume  ·  t reset traffic  ·  c .ovpn  ·  p/L profile link  ·  D delete  ·  esc back"
+		return "s/S suspend/resume  ·  t reset traffic  ·  c .ovpn  ·  p/L profile link  ·  i issue-cert  ·  D delete  ·  esc back"
+	case modePKIDetail:
+		return "r revoke  ·  R rebuild CRL  ·  i issue  ·  f filter certs  ·  esc back"
 	case modeConfView, modeProfileLink:
 		return "↑↓ scroll  ·  esc/enter back"
 	default:
@@ -1008,12 +1369,14 @@ func (m rootModel) chromeHelp() string {
 }
 
 func (m rootModel) listHelp() string {
-	base := "1-5 tabs  ·  j/k  ·  enter detail  ·  n new  ·  r refresh  ·  R reconcile  ·  q quit"
+	base := "1-6 tabs  ·  j/k  ·  enter detail  ·  n new  ·  r refresh  ·  R reconcile  ·  q quit"
 	switch m.tab {
 	case tabInstances:
-		return base + "  ·  u/d up/down  ·  D delete"
+		return base + "  ·  u/d up/down  ·  I import  ·  D delete"
 	case tabClients:
 		return base + "  ·  s/S suspend/resume  ·  D delete"
+	case tabPKI:
+		return "1-6 tabs  ·  c/t CAs|certs  ·  n create CA  ·  i issue  ·  r revoke  ·  R rebuild CRL  ·  f filter  ·  enter detail  ·  q quit"
 	case tabBinaries:
 		return base + "  ·  D delete"
 	default:
@@ -1022,7 +1385,7 @@ func (m rootModel) listHelp() string {
 }
 
 func (m rootModel) renderTabs() string {
-	names := []string{"Instances", "Clients", "Binaries", "Stats", "Events"}
+	names := []string{"Instances", "Clients", "PKI", "Binaries", "Stats", "Events"}
 	parts := make([]string, len(names))
 	for i, n := range names {
 		label := fmt.Sprintf("%d %s", i+1, n)
@@ -1320,13 +1683,154 @@ func (m rootModel) viewClientDetail(w, h int) string {
 	kv("Instance", cl.InstanceName)
 	kv("Name", orDash(cl.Name))
 	kv("Static IP", orDash(cl.StaticIP))
+	kv("Push routes", orDash(strings.Join(cl.PushRoutes, ", ")))
+	kv("Iroutes", orDash(strings.Join(cl.IRoutes, ", ")))
 	kv("Suspended", fmt.Sprintf("%v", cl.Suspended))
 	kv("Connected", fmt.Sprintf("%v  %s", cl.Connected, orDash(cl.ConnectedSince)))
 	kv("Real addr", orDash(cl.RealAddress))
 	kv("Virt addr", orDash(cl.VirtualAddress))
 	kv("Cert path", orDash(cl.ClientCertPath))
 	kv("Key path", orDash(cl.ClientKeyPath))
+	if cl.ClientCertPath == "" || cl.ClientKeyPath == "" {
+		kv("Cert", "missing — press i to issue")
+	}
 	kv("Traffic", formatBytes(cl.RxBytes)+" / "+formatBytes(cl.TxBytes)+"  ("+formatBps(cl.RxBps)+" / "+formatBps(cl.TxBps)+")")
+	return panelStyle.Width(w).Height(h).MaxHeight(h).Render(body.String())
+}
+
+func (m rootModel) viewPKIList(w, mainH int) string {
+	var b strings.Builder
+	// section switcher
+	casLbl, certsLbl := " CAs ", " Certs "
+	if m.pkiSection == "certs" {
+		certsLbl = tabActive.Render(certsLbl)
+		casLbl = tabInactive.Render(casLbl)
+	} else {
+		casLbl = tabActive.Render(casLbl)
+		certsLbl = tabInactive.Render(certsLbl)
+	}
+	b.WriteString(casLbl)
+	b.WriteString(" ")
+	b.WriteString(certsLbl)
+	if m.pkiFilterCA != "" {
+		b.WriteString("  ")
+		b.WriteString(dimStyle.Render("filter CA=" + m.pkiFilterCA + " (f clear)"))
+	}
+	if len(m.tlsCrypts) > 0 {
+		b.WriteString("  ")
+		b.WriteString(dimStyle.Render(fmt.Sprintf("tls-crypt keys: %d", len(m.tlsCrypts))))
+	}
+	b.WriteString("\n\n")
+
+	if m.pkiSection == "certs" {
+		cw := colWidths(w-2, []int{8, 12, 10, 20, 8, 12}, 3)
+		hdr := fmt.Sprintf("%s %s %s %s %s %s",
+			padCell("ID", cw[0]), padCell("CA", cw[1]), padCell("KIND", cw[2]),
+			padCell("CN", cw[3]), padCell("REV", cw[4]), padCell("SERIAL", cw[5]))
+		b.WriteString(headerStyle.Render(hdr))
+		b.WriteString("\n")
+		certs := m.filteredCerts()
+		if len(certs) == 0 {
+			b.WriteString(dimStyle.Render("(no certificates — press i to issue)"))
+			b.WriteString("\n")
+			return b.String()
+		}
+		for i, c := range certs {
+			rev := ""
+			if c.Revoked {
+				rev = "yes"
+			}
+			line := fmt.Sprintf("%s %s %s %s %s %s",
+				padCell(fmt.Sprintf("%d", c.ID), cw[0]),
+				padCell(c.CAName, cw[1]),
+				padCell(c.Kind, cw[2]),
+				padCell(c.CommonName, cw[3]),
+				padCell(rev, cw[4]),
+				padCell(fmt.Sprintf("%d", c.Serial), cw[5]),
+			)
+			if i == m.cursor {
+				b.WriteString(selStyle.Width(w).Render(line))
+			} else if c.Revoked {
+				b.WriteString(warnStyle.Render(line))
+			} else {
+				b.WriteString(line)
+			}
+			b.WriteString("\n")
+		}
+		return b.String()
+	}
+
+	// CAs
+	cw := colWidths(w-2, []int{16, 24, 22, 20}, 1)
+	hdr := fmt.Sprintf("%s %s %s %s",
+		padCell("NAME", cw[0]), padCell("CN", cw[1]), padCell("NOT AFTER", cw[2]), padCell("CERT", cw[3]))
+	b.WriteString(headerStyle.Render(hdr))
+	b.WriteString("\n")
+	if len(m.cas) == 0 {
+		b.WriteString(dimStyle.Render("(no CAs — press n to create)"))
+		b.WriteString("\n")
+		return b.String()
+	}
+	for i, ca := range m.cas {
+		line := fmt.Sprintf("%s %s %s %s",
+			padCell(ca.Name, cw[0]),
+			padCell(ca.CommonName, cw[1]),
+			padCell(ca.NotAfter, cw[2]),
+			padCell(ca.CertPath, cw[3]),
+		)
+		if i == m.cursor {
+			b.WriteString(selStyle.Width(w).Render(line))
+		} else {
+			b.WriteString(line)
+		}
+		b.WriteString("\n")
+	}
+	_ = mainH
+	return b.String()
+}
+
+func (m rootModel) viewPKIDetail(w, h int) string {
+	var body strings.Builder
+	kv := func(k, v string) {
+		body.WriteString(fmt.Sprintf("%s %s\n", labelStyle.Render(k), valueStyle.Render(v)))
+	}
+	if m.detailCert != nil {
+		c := m.detailCert
+		body.WriteString(titleStyle.Render(fmt.Sprintf("Certificate · #%d %s", c.ID, c.CommonName)))
+		body.WriteString("\n\n")
+		kv("CA", c.CAName)
+		kv("Kind", c.Kind)
+		kv("CN", c.CommonName)
+		kv("Serial", fmt.Sprintf("%d", c.Serial))
+		kv("Fingerprint", orDash(c.Fingerprint))
+		kv("Not before", orDash(c.NotBefore))
+		kv("Not after", orDash(c.NotAfter))
+		kv("Revoked", fmt.Sprintf("%v", c.Revoked))
+		kv("Cert path", orDash(c.CertPath))
+		kv("Key path", orDash(c.KeyPath))
+		kv("Instance", orDash(c.InstanceName))
+		kv("Notes", orDash(c.Notes))
+	} else if m.detailCA != nil {
+		ca := m.detailCA
+		body.WriteString(titleStyle.Render("CA · " + ca.Name))
+		body.WriteString("\n\n")
+		kv("Name", ca.Name)
+		kv("CN", ca.CommonName)
+		kv("Org", orDash(ca.Org))
+		kv("Not after", orDash(ca.NotAfter))
+		kv("Cert path", orDash(ca.CertPath))
+		kv("Key path", orDash(ca.KeyPath))
+		// count certs under this CA
+		n := 0
+		for _, c := range m.certs {
+			if c.CAName == ca.Name {
+				n++
+			}
+		}
+		kv("Certificates", fmt.Sprintf("%d", n))
+	} else {
+		return ""
+	}
 	return panelStyle.Width(w).Height(h).MaxHeight(h).Render(body.String())
 }
 

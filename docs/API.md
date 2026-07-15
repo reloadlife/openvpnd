@@ -28,6 +28,7 @@ Authentication: `Authorization: Bearer <auth.token>` on all `/v1/*` routes.
 | Method | Path |
 |--------|------|
 | GET/POST | `/v1/instances` |
+| POST | `/v1/instances/import` |
 | GET/PATCH/DELETE | `/v1/instances/{name}` |
 | POST | `/v1/instances/{name}/up` |
 | POST | `/v1/instances/{name}/down` |
@@ -35,6 +36,44 @@ Authentication: `Authorization: Bearer <auth.token>` on all `/v1/*` routes.
 | GET | `/v1/instances/{name}/export` |
 
 `role` is `server` or `client`. `binary_name` selects a registry entry; `binary_path` overrides.
+
+### Import / adopt existing conf
+
+`POST /v1/instances/import` parses an OpenVPN `.conf` / `.ovpn` (server or client) into create fields.
+
+Body:
+
+```json
+{
+  "name": "optional",
+  "content": "port 1194\nproto udp\nserver 10.8.0.0 255.255.255.0\n...",
+  "enabled": true,
+  "create": true,
+  "binary_name": "default",
+  "public_endpoint": "vpn.example.com:1194"
+}
+```
+
+| Field | Notes |
+|-------|--------|
+| `content` | Required raw conf text |
+| `create` | `false` → parse preview only (`200`); `true` or omitted → create instance (`201`) |
+| `name` / `enabled` / `binary_name` / `public_endpoint` | Optional overrides applied after parse |
+
+Mapped: role, proto, port, local, dev/dev-type, topology, `server` net+mask → `server_network` CIDR, remotes, cipher/data-ciphers/auth, PKI file paths (`ca`/`cert`/`key`/`dh`/`tls-crypt`/`secret`), push DNS/routes/domain/redirect-gateway, plugins, max-clients/tls-version-min/tun-mtu/buffers/server-ipv6 (folded into `extra_directives`). Control-plane lines (`management`, `status`, `writepid`, `verb`, `persist-*`, `keepalive`) are ignored. Inline `<ca>`… blocks are skipped with a warning (file path refs only).
+
+Response:
+
+```json
+{
+  "parsed": { "role": "server", "port": 1194, "server_network": "10.8.0.0/24", "...": "..." },
+  "warnings": ["..."],
+  "instance": { "name": "ovpn0", "...": "..." },
+  "auto_filled": ["binary_name=default"]
+}
+```
+
+`instance` / `auto_filled` are present only when `create=true`. When the conf already has cert+key paths, auto PKI issue is disabled.
 
 ### Create smart defaults / validation
 

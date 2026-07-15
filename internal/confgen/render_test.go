@@ -47,14 +47,45 @@ func TestRenderServerDHNone(t *testing.T) {
 	require.Contains(t, res.Content, "dh none")
 }
 
+func TestRenderServerCRLAndKnobs(t *testing.T) {
+	inst := db.Instance{
+		Name: "ovpn0", Role: "server", Port: 1194, ServerNetwork: "10.8.0.0/24",
+		AuthMode: "pki", PKICaPath: "/pki/ca.crt", PKICertPath: "/pki/s.crt", PKIKeyPath: "/pki/s.key",
+		PKICRLPath: "/pki/ca.crl",
+		MaxClients: 64, TLSVersionMin: "1.2", TunMTU: 1400, Sndbuf: 393216, Rcvbuf: 393216,
+		ServerIPv6: "fd00:1194:0:0::/64",
+	}
+	res, err := confgen.RenderInstance(inst, confgen.Paths{ConfDir: "/tmp", RuntimeDir: "/tmp", Name: "ovpn0"}, nil)
+	require.NoError(t, err)
+	require.Contains(t, res.Content, "crl-verify /pki/ca.crl")
+	require.Contains(t, res.Content, "max-clients 64")
+	require.Contains(t, res.Content, "tls-version-min 1.2")
+	require.Contains(t, res.Content, "tun-mtu 1400")
+	require.Contains(t, res.Content, "sndbuf 393216")
+	require.Contains(t, res.Content, "rcvbuf 393216")
+	require.Contains(t, res.Content, "server-ipv6 fd00:1194:0:0::/64")
+}
+
+func TestRenderClientAuthUserPass(t *testing.T) {
+	inst := db.Instance{
+		Name: "home", Role: "client", AuthMode: "pki",
+		Remotes:   []db.Remote{{Host: "vpn.example.com", Port: 1194}},
+		PKICaPath: "/pki/ca.crt", PKICertPath: "/pki/c.crt", PKIKeyPath: "/pki/c.key",
+		AuthUserPass: true,
+	}
+	res, err := confgen.RenderInstance(inst, confgen.Paths{ConfDir: "/tmp", RuntimeDir: "/tmp", Name: "home"}, nil)
+	require.NoError(t, err)
+	require.Contains(t, res.Content, "auth-user-pass")
+}
+
 func TestRenderClient(t *testing.T) {
 	inst := db.Instance{
-		Name:     "home",
-		Role:     "client",
-		DevType:  "tun",
-		Proto:    "udp",
-		AuthMode: "pki",
-		Remotes:  []db.Remote{{Host: "vpn.example.com", Port: 1194}},
+		Name:        "home",
+		Role:        "client",
+		DevType:     "tun",
+		Proto:       "udp",
+		AuthMode:    "pki",
+		Remotes:     []db.Remote{{Host: "vpn.example.com", Port: 1194}},
 		PKICaPath:   "/pki/ca.crt",
 		PKICertPath: "/pki/client.crt",
 		PKIKeyPath:  "/pki/client.key",
@@ -72,4 +103,23 @@ func TestRenderCCD(t *testing.T) {
 	require.Contains(t, body, "ifconfig-push 10.8.0.5")
 	disabled := confgen.RenderCCD(db.Client{CommonName: "bob", Suspended: true}, "10.8.0.0/24")
 	require.Contains(t, disabled, "disable")
+}
+
+func TestRenderCCDIroutes(t *testing.T) {
+	body := confgen.RenderCCD(db.Client{
+		CommonName: "branch",
+		StaticIP:   "10.8.0.10",
+		PushRoutes: []string{"10.9.0.0/24"},
+		IRoutes:    []string{"192.168.50.0/24", "10.20.0.0/16"},
+	}, "10.8.0.0/24")
+	require.Contains(t, body, "ifconfig-push 10.8.0.10")
+	require.Contains(t, body, `push "route 10.9.0.0 255.255.255.0"`)
+	require.Contains(t, body, "iroute 192.168.50.0 255.255.255.0")
+	require.Contains(t, body, "iroute 10.20.0.0 255.255.0.0")
+	// suspended still short-circuits before iroutes
+	off := confgen.RenderCCD(db.Client{
+		CommonName: "x", Suspended: true, IRoutes: []string{"10.0.0.0/8"},
+	}, "10.8.0.0/24")
+	require.Contains(t, off, "disable")
+	require.NotContains(t, off, "iroute")
 }

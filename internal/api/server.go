@@ -82,6 +82,8 @@ func (s *Server) Router() http.Handler {
 
 		r.Get("/instances", s.handleListInstances)
 		r.Post("/instances", s.handleCreateInstance)
+		// Static path before /instances/{name} so "import" is not captured as a name.
+		r.Post("/instances/import", s.handleImportInstance)
 		r.Get("/instances/{name}", s.handleGetInstance)
 		r.Patch("/instances/{name}", s.handleUpdateInstance)
 		r.Delete("/instances/{name}", s.handleDeleteInstance)
@@ -109,9 +111,12 @@ func (s *Server) Router() http.Handler {
 		r.Post("/pki/cas", s.handleCreateCA)
 		r.Get("/pki/cas/{name}", s.handleGetCA)
 		r.Delete("/pki/cas/{name}", s.handleDeleteCA)
+		r.Post("/pki/cas/{name}/rebuild-crl", s.handleRebuildCRL)
 		r.Get("/pki/certs", s.handleListCerts)
 		r.Post("/pki/certs", s.handleIssueCert)
 		r.Get("/pki/certs/{id}", s.handleGetCert)
+		r.Post("/pki/certs/{id}/revoke", s.handleRevokeCert)
+		r.Post("/pki/certs/{id}/renew", s.handleRenewCert)
 		r.Get("/pki/tls-crypt", s.handleListTLSCrypt)
 		r.Post("/pki/tls-crypt", s.handleGenerateTLSCrypt)
 

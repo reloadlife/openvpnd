@@ -156,6 +156,13 @@ func (c *Client) CreateInstance(ctx context.Context, req InstanceCreateRequest) 
 	return out.Instance, err
 }
 
+// ImportInstance parses an OpenVPN conf/ovpn and optionally creates an instance.
+func (c *Client) ImportInstance(ctx context.Context, req ImportInstanceRequest) (ImportInstanceResponse, error) {
+	var out ImportInstanceResponse
+	err := c.do(ctx, http.MethodPost, "/v1/instances/import", req, &out)
+	return out, err
+}
+
 // GetInstance returns one instance.
 func (c *Client) GetInstance(ctx context.Context, name string) (Instance, error) {
 	var out Instance
@@ -389,6 +396,34 @@ func (c *Client) IssueCert(ctx context.Context, req IssueCertRequest) (Certifica
 	return out, err
 }
 
+// GetCertificate returns a cert by id.
+func (c *Client) GetCertificate(ctx context.Context, id int64) (Certificate, error) {
+	var out Certificate
+	err := c.do(ctx, http.MethodGet, fmt.Sprintf("/v1/pki/certs/%d", id), nil, &out)
+	return out, err
+}
+
+// RevokeCertificate revokes a cert and rebuilds the CA CRL.
+func (c *Client) RevokeCertificate(ctx context.Context, id int64, reason string) (Certificate, error) {
+	var out Certificate
+	err := c.do(ctx, http.MethodPost, fmt.Sprintf("/v1/pki/certs/%d/revoke", id), RevokeCertRequest{Reason: reason}, &out)
+	return out, err
+}
+
+// RenewCertificate re-issues a leaf cert (new serial/key), clears revoked if set.
+func (c *Client) RenewCertificate(ctx context.Context, id int64, req RenewCertRequest) (Certificate, error) {
+	var out Certificate
+	err := c.do(ctx, http.MethodPost, fmt.Sprintf("/v1/pki/certs/%d/renew", id), req, &out)
+	return out, err
+}
+
+// RebuildCRL rebuilds the CRL for a CA from revoked certificates in the DB.
+func (c *Client) RebuildCRL(ctx context.Context, caName string) (CA, error) {
+	var out CA
+	err := c.do(ctx, http.MethodPost, "/v1/pki/cas/"+caName+"/rebuild-crl", nil, &out)
+	return out, err
+}
+
 // GenerateTLSCrypt creates a tls-crypt key.
 func (c *Client) GenerateTLSCrypt(ctx context.Context, name string) (TLSCryptKey, error) {
 	var out TLSCryptKey
@@ -411,6 +446,17 @@ func (c *Client) IssueServerCert(ctx context.Context, instance string, req Issue
 // IssueClientCert issues client cert and wires client paths.
 func (c *Client) IssueClientCert(ctx context.Context, instance, cn string, req IssueClientCertRequest) error {
 	return c.do(ctx, http.MethodPost, "/v1/instances/"+instance+"/clients/"+cn+"/issue-cert", req, nil)
+}
+
+// RevokeCert revokes a managed certificate by id (alias of RevokeCertificate).
+func (c *Client) RevokeCert(ctx context.Context, id int64, reason string) error {
+	_, err := c.RevokeCertificate(ctx, id, reason)
+	return err
+}
+
+// RenewCert re-issues a leaf certificate (same CA/kind/CN).
+func (c *Client) RenewCert(ctx context.Context, id int64) (Certificate, error) {
+	return c.RenewCertificate(ctx, id, RenewCertRequest{})
 }
 
 // ListFeatures returns builtin + custom feature presets.

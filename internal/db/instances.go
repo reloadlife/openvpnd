@@ -13,10 +13,11 @@ dev_type, device, proto, local_bind, port, remotes,
 server_network, topology, pool_start, pool_end, auth_mode,
 cipher, data_ciphers, auth_digest,
 push_routes, push_dns, push_domain, redirect_gateway,
-pki_ca_path, pki_cert_path, pki_key_path, pki_tls_crypt_path, pki_dh_path,
+pki_ca_path, pki_cert_path, pki_key_path, pki_tls_crypt_path, pki_dh_path, pki_crl_path,
 static_key_path, extra_directives,
 plugins, env_vars, feature_sets,
 pre_up, post_up, pre_down, post_down,
+max_clients, tls_version_min, tun_mtu, sndbuf, rcvbuf, server_ipv6, auth_user_pass,
 conf_hash, pid, last_error,
 last_rx_bytes, last_tx_bytes, last_rx_bps, last_tx_bps, connected_clients,
 public_endpoint,
@@ -26,7 +27,7 @@ func scanInstance(scanner interface {
 	Scan(dest ...any) error
 }) (Instance, error) {
 	var i Instance
-	var enabled, redirect int
+	var enabled, redirect, authUserPass int
 	var remotes, pushRoutes, pushDNS string
 	var plugins, envVars, featureSets string
 	var created, updated string
@@ -36,10 +37,11 @@ func scanInstance(scanner interface {
 		&i.ServerNetwork, &i.Topology, &i.PoolStart, &i.PoolEnd, &i.AuthMode,
 		&i.Cipher, &i.DataCiphers, &i.AuthDigest,
 		&pushRoutes, &pushDNS, &i.PushDomain, &redirect,
-		&i.PKICaPath, &i.PKICertPath, &i.PKIKeyPath, &i.PKITLSCryptPath, &i.PKIDHPath,
+		&i.PKICaPath, &i.PKICertPath, &i.PKIKeyPath, &i.PKITLSCryptPath, &i.PKIDHPath, &i.PKICRLPath,
 		&i.StaticKeyPath, &i.ExtraDirectives,
 		&plugins, &envVars, &featureSets,
 		&i.PreUp, &i.PostUp, &i.PreDown, &i.PostDown,
+		&i.MaxClients, &i.TLSVersionMin, &i.TunMTU, &i.Sndbuf, &i.Rcvbuf, &i.ServerIPv6, &authUserPass,
 		&i.ConfHash, &i.PID, &i.LastError,
 		&i.LastRxBytes, &i.LastTxBytes, &i.LastRxBps, &i.LastTxBps, &i.ConnectedClients,
 		&i.PublicEndpoint,
@@ -50,6 +52,7 @@ func scanInstance(scanner interface {
 	}
 	i.Enabled = enabled != 0
 	i.RedirectGateway = redirect != 0
+	i.AuthUserPass = authUserPass != 0
 	i.Remotes = decodeRemotes(remotes)
 	i.PushRoutes = decodeJSONList(pushRoutes)
 	i.PushDNS = decodeJSONList(pushDNS)
@@ -97,17 +100,19 @@ INSERT INTO instances (
   server_network, topology, pool_start, pool_end, auth_mode,
   cipher, data_ciphers, auth_digest,
   push_routes, push_dns, push_domain, redirect_gateway,
-  pki_ca_path, pki_cert_path, pki_key_path, pki_tls_crypt_path, pki_dh_path,
+  pki_ca_path, pki_cert_path, pki_key_path, pki_tls_crypt_path, pki_dh_path, pki_crl_path,
   static_key_path, extra_directives,
   plugins, env_vars, feature_sets,
   pre_up, post_up, pre_down, post_down,
+  max_clients, tls_version_min, tun_mtu, sndbuf, rcvbuf, server_ipv6, auth_user_pass,
   conf_hash, pid, last_error,
   last_rx_bytes, last_tx_bytes, last_rx_bps, last_tx_bps, connected_clients,
   public_endpoint,
   created_at, updated_at
 ) VALUES (
   ?,?,?,?,?, ?,?,?,?,?,?, ?,?,?,?,?, ?,?,?, ?,?,?,?,
-  ?,?,?,?,?, ?,?, ?,?,?, ?,?,?,?,
+  ?,?,?,?,?,?, ?,?, ?,?,?, ?,?,?,?,
+  ?,?,?,?,?,?, ?,
   '', 0, '', 0,0,0,0,0, ?, ?,?
 )`,
 		i.Name, i.Role, boolToInt(i.Enabled), i.BinaryName, i.BinaryPath,
@@ -115,10 +120,11 @@ INSERT INTO instances (
 		i.ServerNetwork, i.Topology, i.PoolStart, i.PoolEnd, i.AuthMode,
 		i.Cipher, i.DataCiphers, i.AuthDigest,
 		encodeJSONList(i.PushRoutes), encodeJSONList(i.PushDNS), i.PushDomain, boolToInt(i.RedirectGateway),
-		i.PKICaPath, i.PKICertPath, i.PKIKeyPath, i.PKITLSCryptPath, i.PKIDHPath,
+		i.PKICaPath, i.PKICertPath, i.PKIKeyPath, i.PKITLSCryptPath, i.PKIDHPath, i.PKICRLPath,
 		i.StaticKeyPath, i.ExtraDirectives,
 		encodePlugins(i.Plugins), encodeEnvVars(i.EnvVars), encodeJSONList(i.FeatureSets),
 		i.PreUp, i.PostUp, i.PreDown, i.PostDown,
+		i.MaxClients, i.TLSVersionMin, i.TunMTU, i.Sndbuf, i.Rcvbuf, i.ServerIPv6, boolToInt(i.AuthUserPass),
 		i.PublicEndpoint,
 		now, now,
 	)
@@ -195,10 +201,11 @@ UPDATE instances SET
   server_network=?, topology=?, pool_start=?, pool_end=?, auth_mode=?,
   cipher=?, data_ciphers=?, auth_digest=?,
   push_routes=?, push_dns=?, push_domain=?, redirect_gateway=?,
-  pki_ca_path=?, pki_cert_path=?, pki_key_path=?, pki_tls_crypt_path=?, pki_dh_path=?,
+  pki_ca_path=?, pki_cert_path=?, pki_key_path=?, pki_tls_crypt_path=?, pki_dh_path=?, pki_crl_path=?,
   static_key_path=?, extra_directives=?,
   plugins=?, env_vars=?, feature_sets=?,
   pre_up=?, post_up=?, pre_down=?, post_down=?,
+  max_clients=?, tls_version_min=?, tun_mtu=?, sndbuf=?, rcvbuf=?, server_ipv6=?, auth_user_pass=?,
   conf_hash=?, public_endpoint=?, updated_at=?
 WHERE name=?`,
 		i.Role, boolToInt(i.Enabled), i.BinaryName, i.BinaryPath,
@@ -206,10 +213,11 @@ WHERE name=?`,
 		i.ServerNetwork, i.Topology, i.PoolStart, i.PoolEnd, i.AuthMode,
 		i.Cipher, i.DataCiphers, i.AuthDigest,
 		encodeJSONList(i.PushRoutes), encodeJSONList(i.PushDNS), i.PushDomain, boolToInt(i.RedirectGateway),
-		i.PKICaPath, i.PKICertPath, i.PKIKeyPath, i.PKITLSCryptPath, i.PKIDHPath,
+		i.PKICaPath, i.PKICertPath, i.PKIKeyPath, i.PKITLSCryptPath, i.PKIDHPath, i.PKICRLPath,
 		i.StaticKeyPath, i.ExtraDirectives,
 		encodePlugins(i.Plugins), encodeEnvVars(i.EnvVars), encodeJSONList(i.FeatureSets),
 		i.PreUp, i.PostUp, i.PreDown, i.PostDown,
+		i.MaxClients, i.TLSVersionMin, i.TunMTU, i.Sndbuf, i.Rcvbuf, i.ServerIPv6, boolToInt(i.AuthUserPass),
 		i.ConfHash, i.PublicEndpoint, now, i.Name,
 	)
 	if err != nil {

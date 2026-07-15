@@ -3,9 +3,11 @@ package pki_test
 import (
 	"crypto/x509"
 	"encoding/pem"
+	"math/big"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -77,4 +79,45 @@ func TestCreateCAAndIssue(t *testing.T) {
 	cli2, err := m.Issue(pki.IssueOptions{CAName: "main", Kind: pki.KindClient, CommonName: "alice"})
 	require.NoError(t, err)
 	require.Equal(t, filepath.Dir(cli.CertPath), filepath.Dir(cli2.CertPath))
+}
+
+func TestRebuildCRL(t *testing.T) {
+	dir := t.TempDir()
+	m, err := pki.NewManager(dir)
+	require.NoError(t, err)
+
+	_, err = m.CreateCA(pki.CreateCAOptions{Name: "main", CommonName: "CRL CA", ValidDays: 365})
+	require.NoError(t, err)
+
+	cli, err := m.Issue(pki.IssueOptions{CAName: "main", Kind: pki.KindClient, CommonName: "bob", ValidDays: 30})
+	require.NoError(t, err)
+
+	path, num, err := m.RebuildCRL("main", []pki.RevokedEntry{
+		{Serial: big.NewInt(cli.Serial), RevokedAt: time.Now().UTC(), Reason: "keyCompromise"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), num)
+	require.FileExists(t, path)
+	require.Equal(t, m.CRLPath("main"), path)
+
+	pemBytes, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Contains(t, string(pemBytes), "X509 CRL")
+	block, _ := pem.Decode(pemBytes)
+	require.NotNil(t, block)
+	rl, err := x509.ParseRevocationList(block.Bytes)
+	require.NoError(t, err)
+	require.Len(t, rl.RevokedCertificateEntries, 1)
+	require.Equal(t, 0, big.NewInt(cli.Serial).Cmp(rl.RevokedCertificateEntries[0].SerialNumber))
+
+	// second rebuild increments number
+	path2, num2, err := m.RebuildCRL("main", nil)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), num2)
+	require.Equal(t, path, path2)
+	pemBytes, _ = os.ReadFile(path2)
+	block, _ = pem.Decode(pemBytes)
+	rl, err = x509.ParseRevocationList(block.Bytes)
+	require.NoError(t, err)
+	require.Empty(t, rl.RevokedCertificateEntries)
 }

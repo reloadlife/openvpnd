@@ -115,7 +115,7 @@ func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request) {
 
 	c, err := s.store.CreateClient(r.Context(), name, db.Client{
 		CommonName: cn, Name: display, Notes: req.Notes,
-		StaticIP: staticIP, PushRoutes: req.PushRoutes, Suspended: req.Suspended,
+		StaticIP: staticIP, PushRoutes: req.PushRoutes, IRoutes: req.IRoutes, Suspended: req.Suspended,
 		TrafficLimitBytes: req.TrafficLimitBytes, BandwidthRxBps: req.BandwidthRxBps, BandwidthTxBps: req.BandwidthTxBps,
 		CertRef: req.CertRef, ClientCertPath: req.ClientCertPath, ClientKeyPath: req.ClientKeyPath, Tags: req.Tags,
 	})
@@ -272,6 +272,9 @@ func (s *Server) handleUpdateClient(w http.ResponseWriter, r *http.Request) {
 	if req.PushRoutes != nil {
 		c.PushRoutes = req.PushRoutes
 	}
+	if req.IRoutes != nil {
+		c.IRoutes = req.IRoutes
+	}
 	if req.Suspended != nil {
 		c.Suspended = *req.Suspended
 	}
@@ -385,12 +388,13 @@ func (s *Server) toAPIClient(c db.Client) pkgapi.ServerClient {
 	return pkgapi.ServerClient{
 		ID: c.ID, InstanceID: c.InstanceID, InstanceName: c.InstanceName,
 		CommonName: c.CommonName, Name: c.Name, Notes: c.Notes,
-		StaticIP: c.StaticIP, PushRoutes: c.PushRoutes, Suspended: c.Suspended, Connected: connected,
+		StaticIP: c.StaticIP, PushRoutes: c.PushRoutes, IRoutes: c.IRoutes,
+		Suspended: c.Suspended, Connected: connected,
 		TrafficLimitBytes: c.TrafficLimitBytes, BandwidthRxBps: c.BandwidthRxBps, BandwidthTxBps: c.BandwidthTxBps,
 		CertRef: c.CertRef, ClientCertPath: c.ClientCertPath, ClientKeyPath: c.ClientKeyPath,
 		RealAddress: c.RealAddress, VirtualAddress: c.VirtualAddress,
 		ConnectedSince: c.ConnectedSince,
-		RxBytes: c.EffectiveRx(), TxBytes: c.EffectiveTx(),
+		RxBytes:        c.EffectiveRx(), TxBytes: c.EffectiveTx(),
 		RxBps: c.LastRxBps, TxBps: c.LastTxBps, Tags: c.Tags,
 		CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
 	}

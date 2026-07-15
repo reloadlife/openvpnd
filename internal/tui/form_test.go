@@ -44,6 +44,21 @@ func TestClientCreateDefaultsFields(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, cn.Tip)
+	require.Contains(t, fieldKeys(f), "iroutes")
+}
+
+func TestCAAndIssueCertFields(t *testing.T) {
+	f := newForm("ca", caCreateFields(), map[string]string{"name": "default", "common_name": "CA"})
+	require.Contains(t, fieldKeys(f), "common_name")
+	require.Contains(t, fieldKeys(f), "org")
+
+	iss := newForm("iss", issueCertFields([]string{"default"}), map[string]string{
+		"ca_name": "default", "kind": "client", "common_name": "alice",
+	})
+	v := iss.Values()
+	require.Equal(t, "default", v["ca_name"])
+	require.Equal(t, "client", v["kind"])
+	require.Equal(t, "alice", v["common_name"])
 }
 
 func fieldKeys(f formModel) []string {

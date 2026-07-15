@@ -68,46 +68,46 @@ type Remote struct {
 //
 // Set create_ca_if_empty=true to mint CA "default" when none exists.
 type InstanceCreateRequest struct {
-	Name             string   `json:"name"`
-	Role             string   `json:"role"` // server | client (default server)
-	Enabled          *bool    `json:"enabled,omitempty"`
-	BinaryName       string   `json:"binary_name,omitempty"`
-	BinaryPath       string   `json:"binary_path,omitempty"`
-	DevType          string   `json:"dev_type,omitempty"`
-	Device           string   `json:"device,omitempty"`
-	Proto            string   `json:"proto,omitempty"`
-	LocalBind        string   `json:"local_bind,omitempty"`
-	Port             int      `json:"port,omitempty"`
-	Remotes          []Remote `json:"remotes,omitempty"`
-	Remote           string   `json:"remote,omitempty"` // shorthand host or host:port for client
-	ServerNetwork    string   `json:"server_network,omitempty"`
-	Topology         string   `json:"topology,omitempty"`
-	PoolStart        string   `json:"pool_start,omitempty"`
-	PoolEnd          string   `json:"pool_end,omitempty"`
-	AuthMode         string   `json:"auth_mode,omitempty"`
-	Cipher           string   `json:"cipher,omitempty"`
-	DataCiphers      string   `json:"data_ciphers,omitempty"`
-	AuthDigest       string   `json:"auth_digest,omitempty"`
-	PushRoutes       []string `json:"push_routes,omitempty"`
-	PushDNS          []string `json:"push_dns,omitempty"`
-	PushDomain       string   `json:"push_domain,omitempty"`
-	RedirectGateway  bool     `json:"redirect_gateway,omitempty"`
-	PKICaPath        string   `json:"pki_ca_path,omitempty"`
-	PKICertPath      string   `json:"pki_cert_path,omitempty"`
-	PKIKeyPath       string   `json:"pki_key_path,omitempty"`
+	Name            string   `json:"name"`
+	Role            string   `json:"role"` // server | client (default server)
+	Enabled         *bool    `json:"enabled,omitempty"`
+	BinaryName      string   `json:"binary_name,omitempty"`
+	BinaryPath      string   `json:"binary_path,omitempty"`
+	DevType         string   `json:"dev_type,omitempty"`
+	Device          string   `json:"device,omitempty"`
+	Proto           string   `json:"proto,omitempty"`
+	LocalBind       string   `json:"local_bind,omitempty"`
+	Port            int      `json:"port,omitempty"`
+	Remotes         []Remote `json:"remotes,omitempty"`
+	Remote          string   `json:"remote,omitempty"` // shorthand host or host:port for client
+	ServerNetwork   string   `json:"server_network,omitempty"`
+	Topology        string   `json:"topology,omitempty"`
+	PoolStart       string   `json:"pool_start,omitempty"`
+	PoolEnd         string   `json:"pool_end,omitempty"`
+	AuthMode        string   `json:"auth_mode,omitempty"`
+	Cipher          string   `json:"cipher,omitempty"`
+	DataCiphers     string   `json:"data_ciphers,omitempty"`
+	AuthDigest      string   `json:"auth_digest,omitempty"`
+	PushRoutes      []string `json:"push_routes,omitempty"`
+	PushDNS         []string `json:"push_dns,omitempty"`
+	PushDomain      string   `json:"push_domain,omitempty"`
+	RedirectGateway bool     `json:"redirect_gateway,omitempty"`
+	PKICaPath       string   `json:"pki_ca_path,omitempty"`
+	PKICertPath     string   `json:"pki_cert_path,omitempty"`
+	PKIKeyPath      string   `json:"pki_key_path,omitempty"`
 	PKITLSCryptPath string   `json:"pki_tls_crypt_path,omitempty"`
-	PKIDHPath        string   `json:"pki_dh_path,omitempty"`
-	StaticKeyPath    string   `json:"static_key_path,omitempty"`
-	ExtraDirectives  string   `json:"extra_directives,omitempty"`
+	PKIDHPath       string   `json:"pki_dh_path,omitempty"`
+	StaticKeyPath   string   `json:"static_key_path,omitempty"`
+	ExtraDirectives string   `json:"extra_directives,omitempty"`
 	// Extensions: custom OpenVPN builds / plugins (UDP stuffing, etc.)
-	Plugins     []Plugin  `json:"plugins,omitempty"`
-	EnvVars     []EnvVar  `json:"env_vars,omitempty"`
-	FeatureSets []string  `json:"feature_sets,omitempty"`
-	PreUp            string   `json:"pre_up,omitempty"`
-	PostUp           string   `json:"post_up,omitempty"`
-	PreDown          string   `json:"pre_down,omitempty"`
-	PostDown         string   `json:"post_down,omitempty"`
-	PublicEndpoint   string   `json:"public_endpoint,omitempty"` // host or host:port for client profiles
+	Plugins        []Plugin `json:"plugins,omitempty"`
+	EnvVars        []EnvVar `json:"env_vars,omitempty"`
+	FeatureSets    []string `json:"feature_sets,omitempty"`
+	PreUp          string   `json:"pre_up,omitempty"`
+	PostUp         string   `json:"post_up,omitempty"`
+	PreDown        string   `json:"pre_down,omitempty"`
+	PostDown       string   `json:"post_down,omitempty"`
+	PublicEndpoint string   `json:"public_endpoint,omitempty"` // host or host:port for client profiles
 
 	// Automation (server mTLS)
 	IssueServerCert  *bool  `json:"issue_server_cert,omitempty"`  // default true when cert paths empty + CA available
@@ -146,44 +146,69 @@ type InstanceCreateResponse struct {
 	AutoFilled []string `json:"auto_filled,omitempty"`
 }
 
+// ImportInstanceRequest adopts an existing OpenVPN .conf / .ovpn.
+//
+// Create: nil/true → create instance; false → parse preview only.
+type ImportInstanceRequest struct {
+	Name           string `json:"name,omitempty"`
+	Content        string `json:"content"`
+	Enabled        *bool  `json:"enabled,omitempty"`
+	Create         *bool  `json:"create,omitempty"`
+	BinaryName     string `json:"binary_name,omitempty"`
+	PublicEndpoint string `json:"public_endpoint,omitempty"`
+	// Role hint when conf is ambiguous: server | client
+	Role string `json:"role,omitempty"`
+	// SourcePath optional original path for operator notes.
+	SourcePath string `json:"source_path,omitempty"`
+}
+
+// ImportInstanceResponse is the parse result, optional created instance, and warnings.
+type ImportInstanceResponse struct {
+	Instance   *Instance             `json:"instance,omitempty"`
+	Parsed     InstanceCreateRequest `json:"parsed"`
+	Warnings   []string              `json:"warnings,omitempty"`
+	AutoFilled []string              `json:"auto_filled,omitempty"`
+	Created    bool                  `json:"created"`
+}
+
 // InstanceUpdateRequest patches an instance.
 type InstanceUpdateRequest struct {
-	Enabled          *bool    `json:"enabled,omitempty"`
-	BinaryName       *string  `json:"binary_name,omitempty"`
-	BinaryPath       *string  `json:"binary_path,omitempty"`
-	DevType          *string  `json:"dev_type,omitempty"`
-	Device           *string  `json:"device,omitempty"`
-	Proto            *string  `json:"proto,omitempty"`
-	LocalBind        *string  `json:"local_bind,omitempty"`
-	Port             *int     `json:"port,omitempty"`
-	Remotes          []Remote `json:"remotes,omitempty"`
-	ServerNetwork    *string  `json:"server_network,omitempty"`
-	Topology         *string  `json:"topology,omitempty"`
-	PoolStart        *string  `json:"pool_start,omitempty"`
-	PoolEnd          *string  `json:"pool_end,omitempty"`
-	AuthMode         *string  `json:"auth_mode,omitempty"`
-	Cipher           *string  `json:"cipher,omitempty"`
-	DataCiphers      *string  `json:"data_ciphers,omitempty"`
-	AuthDigest       *string  `json:"auth_digest,omitempty"`
-	PushRoutes       []string `json:"push_routes,omitempty"`
-	PushDNS          []string `json:"push_dns,omitempty"`
-	PushDomain       *string  `json:"push_domain,omitempty"`
-	RedirectGateway  *bool    `json:"redirect_gateway,omitempty"`
-	PKICaPath        *string  `json:"pki_ca_path,omitempty"`
-	PKICertPath      *string  `json:"pki_cert_path,omitempty"`
-	PKIKeyPath       *string  `json:"pki_key_path,omitempty"`
+	Enabled         *bool    `json:"enabled,omitempty"`
+	BinaryName      *string  `json:"binary_name,omitempty"`
+	BinaryPath      *string  `json:"binary_path,omitempty"`
+	DevType         *string  `json:"dev_type,omitempty"`
+	Device          *string  `json:"device,omitempty"`
+	Proto           *string  `json:"proto,omitempty"`
+	LocalBind       *string  `json:"local_bind,omitempty"`
+	Port            *int     `json:"port,omitempty"`
+	Remotes         []Remote `json:"remotes,omitempty"`
+	ServerNetwork   *string  `json:"server_network,omitempty"`
+	Topology        *string  `json:"topology,omitempty"`
+	PoolStart       *string  `json:"pool_start,omitempty"`
+	PoolEnd         *string  `json:"pool_end,omitempty"`
+	AuthMode        *string  `json:"auth_mode,omitempty"`
+	Cipher          *string  `json:"cipher,omitempty"`
+	DataCiphers     *string  `json:"data_ciphers,omitempty"`
+	AuthDigest      *string  `json:"auth_digest,omitempty"`
+	PushRoutes      []string `json:"push_routes,omitempty"`
+	PushDNS         []string `json:"push_dns,omitempty"`
+	PushDomain      *string  `json:"push_domain,omitempty"`
+	RedirectGateway *bool    `json:"redirect_gateway,omitempty"`
+	PKICaPath       *string  `json:"pki_ca_path,omitempty"`
+	PKICertPath     *string  `json:"pki_cert_path,omitempty"`
+	PKIKeyPath      *string  `json:"pki_key_path,omitempty"`
 	PKITLSCryptPath *string  `json:"pki_tls_crypt_path,omitempty"`
-	PKIDHPath        *string  `json:"pki_dh_path,omitempty"`
-	StaticKeyPath    *string  `json:"static_key_path,omitempty"`
-	ExtraDirectives  *string  `json:"extra_directives,omitempty"`
-	Plugins          []Plugin `json:"plugins,omitempty"`
-	EnvVars          []EnvVar `json:"env_vars,omitempty"`
-	FeatureSets      []string `json:"feature_sets,omitempty"`
-	PreUp            *string  `json:"pre_up,omitempty"`
-	PostUp           *string  `json:"post_up,omitempty"`
-	PreDown          *string  `json:"pre_down,omitempty"`
-	PostDown         *string  `json:"post_down,omitempty"`
-	PublicEndpoint   *string  `json:"public_endpoint,omitempty"`
+	PKIDHPath       *string  `json:"pki_dh_path,omitempty"`
+	StaticKeyPath   *string  `json:"static_key_path,omitempty"`
+	ExtraDirectives *string  `json:"extra_directives,omitempty"`
+	Plugins         []Plugin `json:"plugins,omitempty"`
+	EnvVars         []EnvVar `json:"env_vars,omitempty"`
+	FeatureSets     []string `json:"feature_sets,omitempty"`
+	PreUp           *string  `json:"pre_up,omitempty"`
+	PostUp          *string  `json:"post_up,omitempty"`
+	PreDown         *string  `json:"pre_down,omitempty"`
+	PostDown        *string  `json:"post_down,omitempty"`
+	PublicEndpoint  *string  `json:"public_endpoint,omitempty"`
 }
 
 // Instance is the API representation.
@@ -216,8 +241,9 @@ type Instance struct {
 	PKICaPath        string    `json:"pki_ca_path,omitempty"`
 	PKICertPath      string    `json:"pki_cert_path,omitempty"`
 	PKIKeyPath       string    `json:"pki_key_path,omitempty"`
-	PKITLSCryptPath string    `json:"pki_tls_crypt_path,omitempty"`
+	PKITLSCryptPath  string    `json:"pki_tls_crypt_path,omitempty"`
 	PKIDHPath        string    `json:"pki_dh_path,omitempty"`
+	PKICRLPath       string    `json:"pki_crl_path,omitempty"`
 	StaticKeyPath    string    `json:"static_key_path,omitempty"`
 	ExtraDirectives  string    `json:"extra_directives,omitempty"`
 	Plugins          []Plugin  `json:"plugins,omitempty"`
@@ -227,6 +253,13 @@ type Instance struct {
 	PostUp           string    `json:"post_up,omitempty"`
 	PreDown          string    `json:"pre_down,omitempty"`
 	PostDown         string    `json:"post_down,omitempty"`
+	MaxClients       int       `json:"max_clients,omitempty"`
+	TLSVersionMin    string    `json:"tls_version_min,omitempty"`
+	TunMTU           int       `json:"tun_mtu,omitempty"`
+	Sndbuf           int       `json:"sndbuf,omitempty"`
+	Rcvbuf           int       `json:"rcvbuf,omitempty"`
+	ServerIPv6       string    `json:"server_ipv6,omitempty"`
+	AuthUserPass     bool      `json:"auth_user_pass,omitempty"`
 	PublicEndpoint   string    `json:"public_endpoint,omitempty"`
 	PID              int       `json:"pid,omitempty"`
 	LastError        string    `json:"last_error,omitempty"`
@@ -250,6 +283,7 @@ type ClientCreateRequest struct {
 	Notes             string   `json:"notes,omitempty"`
 	StaticIP          string   `json:"static_ip,omitempty"` // empty/auto → allocate
 	PushRoutes        []string `json:"push_routes,omitempty"`
+	IRoutes           []string `json:"iroutes,omitempty"` // subnets behind client (CCD iroute)
 	Suspended         bool     `json:"suspended,omitempty"`
 	TrafficLimitBytes int64    `json:"traffic_limit_bytes,omitempty"`
 	BandwidthRxBps    int64    `json:"bandwidth_rx_bps,omitempty"`
@@ -261,10 +295,10 @@ type ClientCreateRequest struct {
 	IssueCert *bool  `json:"issue_cert,omitempty"`
 	CAName    string `json:"ca_name,omitempty"`
 	// MintProfileLink mints a presigned .ovpn / openvpn://import-profile/ link.
-	MintProfileLink    bool   `json:"mint_profile_link,omitempty"`
-	ProfileLinkTTL     string `json:"profile_link_ttl,omitempty"` // e.g. "24h"
-	ProfileLinkMaxUses *int   `json:"profile_link_max_uses,omitempty"`
-	ProfileLinkNote    string `json:"profile_link_note,omitempty"`
+	MintProfileLink    bool     `json:"mint_profile_link,omitempty"`
+	ProfileLinkTTL     string   `json:"profile_link_ttl,omitempty"` // e.g. "24h"
+	ProfileLinkMaxUses *int     `json:"profile_link_max_uses,omitempty"`
+	ProfileLinkNote    string   `json:"profile_link_note,omitempty"`
 	Tags               []string `json:"tags,omitempty"`
 }
 
@@ -282,6 +316,7 @@ type ClientUpdateRequest struct {
 	Notes             *string  `json:"notes,omitempty"`
 	StaticIP          *string  `json:"static_ip,omitempty"`
 	PushRoutes        []string `json:"push_routes,omitempty"`
+	IRoutes           []string `json:"iroutes,omitempty"`
 	Suspended         *bool    `json:"suspended,omitempty"`
 	TrafficLimitBytes *int64   `json:"traffic_limit_bytes,omitempty"`
 	BandwidthRxBps    *int64   `json:"bandwidth_rx_bps,omitempty"`
@@ -302,6 +337,7 @@ type ServerClient struct {
 	Notes             string    `json:"notes"`
 	StaticIP          string    `json:"static_ip,omitempty"`
 	PushRoutes        []string  `json:"push_routes,omitempty"`
+	IRoutes           []string  `json:"iroutes,omitempty"`
 	Suspended         bool      `json:"suspended"`
 	Connected         bool      `json:"connected"`
 	TrafficLimitBytes int64     `json:"traffic_limit_bytes"`
@@ -371,6 +407,8 @@ type CA struct {
 	Org        string    `json:"org,omitempty"`
 	CertPath   string    `json:"cert_path"`
 	KeyPath    string    `json:"key_path"`
+	CRLPath    string    `json:"crl_path,omitempty"`
+	CRLNumber  int64     `json:"crl_number,omitempty"`
 	NotAfter   string    `json:"not_after,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
@@ -399,9 +437,24 @@ type Certificate struct {
 	Serial       int64     `json:"serial"`
 	Fingerprint  string    `json:"fingerprint,omitempty"`
 	Revoked      bool      `json:"revoked"`
+	RevokedAt    string    `json:"revoked_at,omitempty"`
+	RevokeReason string    `json:"revoke_reason,omitempty"`
 	InstanceName string    `json:"instance_name,omitempty"`
 	Notes        string    `json:"notes,omitempty"`
 	CreatedAt    time.Time `json:"created_at"`
+}
+
+// RevokeCertRequest optionally sets a revocation reason.
+type RevokeCertRequest struct {
+	Reason string `json:"reason,omitempty"`
+}
+
+// RenewCertRequest optionally overrides validity / key type on renew.
+type RenewCertRequest struct {
+	ValidDays int      `json:"valid_days,omitempty"`
+	DNSNames  []string `json:"dns_names,omitempty"`
+	IPs       []string `json:"ips,omitempty"`
+	KeyType   string   `json:"key_type,omitempty"`
 }
 
 // IssueCertRequest issues a leaf cert under a CA.

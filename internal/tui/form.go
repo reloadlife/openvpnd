@@ -21,9 +21,9 @@ const (
 type fieldDef struct {
 	Key          string
 	Label        string
-	Hint         string   // short placeholder / example
-	Tip          string   // longer “what is this?” shown when focused
-	Section      string   // section header when this field starts a group
+	Hint         string // short placeholder / example
+	Tip          string // longer “what is this?” shown when focused
+	Section      string // section header when this field starts a group
 	Width        int
 	Kind         string
 	Options      []string
@@ -416,7 +416,7 @@ func (f formModel) View() string {
 				}
 				cur := opts[idx]
 				if focused {
-					val = selStyle.Render(" ◀ "+cur+" ▶ ")
+					val = selStyle.Render(" ◀ " + cur + " ▶ ")
 				} else {
 					val = valueStyle.Render(cur)
 				}
@@ -758,6 +758,11 @@ func clientCreateFields(servers []string) []fieldDef {
 			Tip:  "Fixed tunnel address inside the server network. Leave empty to auto-pick the next free host (recommended).",
 		},
 		{
+			Key: "iroutes", Label: "Iroutes",
+			Hint: "192.168.1.0/24,10.20.0.0/16",
+			Tip:  "Subnets behind this client (site-to-site). Emitted as CCD iroute so the server routes those nets via the client. CSV of CIDRs; optional.",
+		},
+		{
 			Key: "issue_cert", Label: "Issue cert", Kind: fieldBool, Section: "One-shot provisioning",
 			Hint: "mint mTLS client cert",
 			Tip:  "ON (default) = create a client certificate under the managed CA and wire paths. Turn OFF only if you paste existing cert/key paths below.",
@@ -811,6 +816,50 @@ func binaryCreateFields() []fieldDef {
 			Key: "notes", Label: "Notes",
 			Hint: "optional description",
 			Tip:  "Free-form note for operators (build flags, “has UDP stuffing”, package version). Not used by OpenVPN itself.",
+		},
+	}
+}
+
+func caCreateFields() []fieldDef {
+	return []fieldDef{
+		{
+			Key: "name", Label: "Name", Section: "Certificate Authority",
+			Hint: "default, home, work",
+			Tip:  "Short CA id used in API paths and when issuing certs. Letters, digits, _ -.",
+		},
+		{
+			Key: "common_name", Label: "Common Name",
+			Hint: "My VPN CA",
+			Tip:  "Subject CN on the CA certificate (shown to operators and in cert chains).",
+		},
+		{
+			Key: "org", Label: "Org",
+			Hint: "optional organization",
+			Tip:  "Optional O= field on the CA certificate.",
+		},
+	}
+}
+
+func issueCertFields(caNames []string) []fieldDef {
+	opts := append([]string{}, caNames...)
+	if len(opts) == 0 {
+		opts = []string{"(no CAs)"}
+	}
+	return []fieldDef{
+		{
+			Key: "ca_name", Label: "CA", Kind: fieldSelect, Options: opts, Section: "Issue certificate",
+			Hint: "signing CA",
+			Tip:  "Managed CA that will sign this leaf certificate.",
+		},
+		{
+			Key: "kind", Label: "Kind", Kind: fieldSelect, Options: []string{"client", "server"},
+			Hint: "client or server EKU",
+			Tip:  "client = VPN user/machine; server = OpenVPN listener identity.",
+		},
+		{
+			Key: "common_name", Label: "Common Name",
+			Hint: "alice, vpn.example.com",
+			Tip:  "Leaf certificate CN. For clients this is usually the VPN username; for servers often the public hostname.",
 		},
 	}
 }

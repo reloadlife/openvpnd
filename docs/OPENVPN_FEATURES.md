@@ -59,6 +59,15 @@ This document is the source of truth for “is option X supported?” and for te
 | auth digest | `auth_digest` | `auth` | confgen, profile |
 | Managed CA issue | PKI API | files on disk + DB | pki, api |
 | Client issue | client create / issue-cert | client cert paths | api, pki |
+| CRL / crl-verify | revoke + rebuild-crl | `crl-verify` path | pki, confgen, api |
+| Renew leaf | POST renew | re-issue same CN | pki, api |
+| max-clients | `max_clients` | `max-clients N` | confgen |
+| tls-version-min | `tls_version_min` | `tls-version-min` | confgen |
+| tun-mtu / buffers | `tun_mtu` / `sndbuf` / `rcvbuf` | directives | confgen |
+| server-ipv6 | `server_ipv6` | `server-ipv6` | confgen |
+| auth-user-pass (client) | `auth_user_pass` | `auth-user-pass` | confgen |
+| CCD iroute | client `iroutes` | `iroute net mask` | confgen CCD |
+| Conf import | POST import | parse → instance | confimport, api |
 
 ### Control plane (always injected)
 
@@ -152,20 +161,18 @@ Priority order for first-class promotion:
 
 | # | Area | OpenVPN surface | Acceptance criteria |
 |---|------|-----------------|---------------------|
-| 1 | CRL / revoke | CRL file, status revoke | Issue + revoke API; conf `crl-verify` |
-| 2 | Conf import / adopt | parse `.ovpn`/`.conf` → instance | Round-trip test fixture |
-| 3 | IPv6 pool | `server-ipv6`, `ifconfig-ipv6` | Dual-stack confgen + tests |
-| 4 | max-clients / duplicate-cn | directives | Typed fields + confgen tests |
-| 5 | tls-version / tls-ciphers | modern TLS knobs | Validation + confgen |
-| 6 | Buffer / MTU | `tun-mtu`, `sndbuf`, `rcvbuf` | Typed optional fields |
-| 7 | auth-user-pass (+ plugin) | username/password auth | Plugin path + docs |
-| 8 | TAP / server-bridge | bridge mode | Explicit opt-in; integration test |
-| 9 | iroute / multi-subnet CCD | CCD `iroute` | Client routes model |
-| 10 | Bandwidth enforcement | tc/nft from fields | Today fields only |
-| 11 | Full management API | kill, hold, state, logs | Beyond status sample |
-| 12 | Config push advanced | `push-reset`, block-ipv6 | As needed |
-| 13 | TUI PKI screens | CA/cert UX | Manual E2E checklist |
-| 14 | UDP stuffing first-class | fork options | After real fork binary available |
+| 1 | ~~CRL / revoke~~ | done | — |
+| 2 | ~~Conf import~~ | done (file content; not live adopt) | Live process adopt still open |
+| 3 | Full IPv6 pool UX | ifconfig-ipv6 / dual pool | Beyond `server-ipv6` string |
+| 4 | ~~max-clients / tls-version / mtu / buf~~ | done | — |
+| 5 | tls-ciphers / tls-groups | modern TLS suites | Typed optional |
+| 6 | auth-user-pass-verify / LDAP | server auth plugins | Plugin recipes + docs |
+| 7 | TAP / server-bridge | bridge mode | Explicit opt-in |
+| 8 | ~~iroute~~ | done | Multi-ACL still open |
+| 9 | Bandwidth enforcement | tc/nft from fields | Today fields only |
+| 10 | Full management API | kill, hold, state, logs | Beyond status sample |
+| 11 | Live adopt running openvpn | pid/socket discover | Integration |
+| 12 | UDP stuffing first-class | fork options | After real fork binary |
 
 ---
 

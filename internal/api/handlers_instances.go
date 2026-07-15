@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/reloadlife/openvpnd/internal/confgen"
+	"github.com/reloadlife/openvpnd/internal/confimport"
 	"github.com/reloadlife/openvpnd/internal/db"
 	"github.com/reloadlife/openvpnd/internal/instance"
 	"github.com/reloadlife/openvpnd/internal/pki"
@@ -35,16 +36,116 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	out, prepared, err := s.createInstanceFromRequest(r, req)
+	if err != nil {
+		writeCreateError(w, err)
+		return
+	}
+	resp := pkgapi.InstanceCreateResponse{
+		Instance:   s.toAPIInstance(out),
+		AutoFilled: prepared.Auto,
+	}
+	writeJSON(w, http.StatusCreated, resp)
+}
+
+func (s *Server) handleImportInstance(w http.ResponseWriter, r *http.Request) {
+	var req pkgapi.ImportInstanceRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	if strings.TrimSpace(req.Content) == "" {
+		writeError(w, http.StatusBadRequest, "bad_request", "content is required")
+		return
+	}
+
+	parsed, err := confimport.Parse(req.Content)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "parse_error", err.Error())
+		return
+	}
+
+	// Optional role override when conf is ambiguous.
+	if req.Role != "" {
+		parsed.Role = strings.ToLower(strings.TrimSpace(req.Role))
+	}
+
+	createReq := parsed.ToCreateRequest()
+	if req.Name != "" {
+		createReq.Name = req.Name
+	}
+	if req.Enabled != nil {
+		createReq.Enabled = req.Enabled
+	}
+	if req.BinaryName != "" {
+		createReq.BinaryName = req.BinaryName
+	}
+	if req.PublicEndpoint != "" {
+		createReq.PublicEndpoint = req.PublicEndpoint
+	}
+	if req.SourcePath != "" {
+		// Preserve source path as a comment in extra directives for operators.
+		note := "# imported from " + req.SourcePath + "\n"
+		createReq.ExtraDirectives = note + createReq.ExtraDirectives
+	}
+
+	resp := pkgapi.ImportInstanceResponse{
+		Parsed:   createReq,
+		Warnings: append([]string(nil), parsed.Warnings...),
+	}
+
+	// create defaults to true when omitted (adopt-friendly).
+	doCreate := true
+	if req.Create != nil {
+		doCreate = *req.Create
+	}
+	if !doCreate {
+		resp.Created = false
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+
+	out, prepared, err := s.createInstanceFromRequest(r, createReq)
+	if err != nil {
+		writeCreateError(w, err)
+		return
+	}
+	inst := s.toAPIInstance(out)
+	resp.Instance = &inst
+	resp.AutoFilled = prepared.Auto
+	resp.Created = true
+	_ = s.store.AddEvent(r.Context(), "info", "import", out.Name, "", "instance imported from conf",
+		fmt.Sprintf(`{"auto":%q,"source":%q}`, strings.Join(prepared.Auto, ","), req.SourcePath))
+	writeJSON(w, http.StatusCreated, resp)
+}
+
+// createError carries HTTP status for create/import failures.
+type createError struct {
+	status int
+	code   string
+	msg    string
+}
+
+func (e *createError) Error() string { return e.msg }
+
+func writeCreateError(w http.ResponseWriter, err error) {
+	if ce, ok := err.(*createError); ok {
+		writeError(w, ce.status, ce.code, ce.msg)
+		return
+	}
+	writeError(w, http.StatusInternalServerError, "internal", err.Error())
+}
+
+// createInstanceFromRequest runs Prepare + store + optional PKI issue (shared by create and import).
+func (s *Server) createInstanceFromRequest(r *http.Request, req pkgapi.InstanceCreateRequest) (db.Instance, instance.Result, error) {
 	ctxBuild, err := s.buildInstanceContext(r)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
-		return
+		return db.Instance{}, instance.Result{}, &createError{http.StatusInternalServerError, "db_error", err.Error()}
 	}
 
 	in, err := createInputFromAPI(req)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
-		return
+		return db.Instance{}, instance.Result{}, &createError{http.StatusBadRequest, "bad_request", err.Error()}
 	}
 	// Default automation flags for servers when not specified
 	if in.Role == "server" || in.Role == "" {
@@ -60,14 +161,12 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 
 	prepared, err := instance.Prepare(in, ctxBuild)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "validation_error", err.Error())
-		return
+		return db.Instance{}, instance.Result{}, &createError{http.StatusBadRequest, "validation_error", err.Error()}
 	}
 
 	out, err := s.store.CreateInstance(r.Context(), prepared.Instance)
 	if err != nil {
-		writeError(w, http.StatusConflict, "create_failed", err.Error())
-		return
+		return db.Instance{}, instance.Result{}, &createError{http.StatusConflict, "create_failed", err.Error()}
 	}
 
 	// Post-create: CA + server cert + tls-crypt
@@ -79,8 +178,7 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 				name := firstNonEmpty(caName, "default")
 				mgr, err := pki.NewManager(s.cfg.OpenVPN.PKIDir)
 				if err != nil {
-					writeError(w, http.StatusInternalServerError, "pki_error", err.Error())
-					return
+					return db.Instance{}, instance.Result{}, &createError{http.StatusInternalServerError, "pki_error", err.Error()}
 				}
 				mat, err := mgr.CreateCA(pki.CreateCAOptions{
 					Name: name, CommonName: "OpenVPNd CA " + name, ValidDays: 3650,
@@ -92,8 +190,7 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 							Name: name, CommonName: name, CertPath: cp, KeyPath: kp, SerialNext: 2,
 						})
 					} else {
-						writeError(w, http.StatusBadRequest, "pki_error", "create CA: "+err.Error())
-						return
+						return db.Instance{}, instance.Result{}, &createError{http.StatusBadRequest, "pki_error", "create CA: "+err.Error()}
 					}
 				} else {
 					_, _ = s.store.UpsertCA(r.Context(), db.CA{
@@ -110,8 +207,7 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 		dns := []string{prepared.ServerCN}
 		issued, _, err := s.issueAndStore(r, caName, "server", prepared.ServerCN, 825, dns, nil, "", out.Name)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "pki_error", "instance created but cert issue failed: "+err.Error())
-			return
+			return db.Instance{}, instance.Result{}, &createError{http.StatusBadRequest, "pki_error", "instance created but cert issue failed: "+err.Error()}
 		}
 		ca, _ := s.store.GetCA(r.Context(), caName)
 		fresh, _ := s.store.GetInstance(r.Context(), out.Name)
@@ -119,6 +215,9 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 			fresh.PKICaPath = ca.CertPath
 			fresh.PKICertPath = issued.CertPath
 			fresh.PKIKeyPath = issued.KeyPath
+			if ca.CRLPath != "" {
+				fresh.PKICRLPath = ca.CRLPath
+			}
 			if prepared.GenerateTLSCrypt {
 				mgr, _ := pki.NewManager(s.cfg.OpenVPN.PKIDir)
 				if mgr != nil {
@@ -140,11 +239,7 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 	if fresh != nil {
 		out = *fresh
 	}
-	resp := pkgapi.InstanceCreateResponse{
-		Instance:   s.toAPIInstance(out),
-		AutoFilled: prepared.Auto,
-	}
-	writeJSON(w, http.StatusCreated, resp)
+	return out, prepared, nil
 }
 
 func (s *Server) buildInstanceContext(r *http.Request) (instance.Context, error) {
@@ -488,10 +583,13 @@ func (s *Server) toAPIInstance(i db.Instance) pkgapi.Instance {
 		PushRoutes: i.PushRoutes, PushDNS: i.PushDNS, PushDomain: i.PushDomain,
 		RedirectGateway: i.RedirectGateway,
 		PKICaPath: i.PKICaPath, PKICertPath: i.PKICertPath, PKIKeyPath: i.PKIKeyPath,
-		PKITLSCryptPath: i.PKITLSCryptPath, PKIDHPath: i.PKIDHPath, StaticKeyPath: i.StaticKeyPath,
+		PKITLSCryptPath: i.PKITLSCryptPath, PKIDHPath: i.PKIDHPath, PKICRLPath: i.PKICRLPath,
+		StaticKeyPath: i.StaticKeyPath,
 		ExtraDirectives: i.ExtraDirectives,
 		Plugins: toAPIPlugins(i.Plugins), EnvVars: toAPIEnv(i.EnvVars), FeatureSets: i.FeatureSets,
 		PreUp: i.PreUp, PostUp: i.PostUp, PreDown: i.PreDown, PostDown: i.PostDown,
+		MaxClients: i.MaxClients, TLSVersionMin: i.TLSVersionMin, TunMTU: i.TunMTU,
+		Sndbuf: i.Sndbuf, Rcvbuf: i.Rcvbuf, ServerIPv6: i.ServerIPv6, AuthUserPass: i.AuthUserPass,
 		PublicEndpoint: i.PublicEndpoint,
 		PID: i.PID, LastError: i.LastError, ConnectedClients: i.ConnectedClients,
 		RxBytes: i.LastRxBytes, TxBytes: i.LastTxBytes, RxBps: i.LastRxBps, TxBps: i.LastTxBps,

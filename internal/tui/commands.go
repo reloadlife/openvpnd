@@ -23,6 +23,9 @@ type dataMsg struct {
 	binaries  []pkgapi.Binary
 	stats     pkgapi.Stats
 	events    []pkgapi.Event
+	cas       []pkgapi.CA
+	certs     []pkgapi.Certificate
+	tlsCrypts []pkgapi.TLSCryptKey
 	err       error
 }
 
@@ -48,10 +51,10 @@ type clientCreatedMsg struct {
 }
 
 type confViewMsg struct {
-	title  string
-	body   string
-	qr     string
-	err    error
+	title string
+	body  string
+	qr    string
+	err   error
 }
 
 func tickCmd(d time.Duration) tea.Cmd {
@@ -97,6 +100,16 @@ func fetchData(c *pkgapi.Client, gen uint64) tea.Cmd {
 			return msg
 		}
 		msg.events = events
+		// PKI is optional for older daemons — soft-fail empty lists
+		if cas, err := c.ListCAs(ctx); err == nil {
+			msg.cas = cas
+		}
+		if certs, err := c.ListCertificates(ctx, ""); err == nil {
+			msg.certs = certs
+		}
+		if keys, err := c.ListTLSCrypt(ctx); err == nil {
+			msg.tlsCrypts = keys
+		}
 		return msg
 	}
 }
@@ -240,6 +253,60 @@ func doExportInstance(c *pkgapi.Client, name string) tea.Cmd {
 			return confViewMsg{err: err}
 		}
 		return confViewMsg{title: name + " conf", body: body}
+	}
+}
+
+func doCreateCA(c *pkgapi.Client, req pkgapi.CreateCARequest) tea.Cmd {
+	return doAction(func(ctx context.Context) error {
+		_, err := c.CreateCA(ctx, req)
+		return err
+	}, "CA "+req.Name+" created")
+}
+
+func doIssueCert(c *pkgapi.Client, req pkgapi.IssueCertRequest) tea.Cmd {
+	return doAction(func(ctx context.Context) error {
+		_, err := c.IssueCert(ctx, req)
+		return err
+	}, "cert "+req.CommonName+" issued")
+}
+
+func doRevokeCert(c *pkgapi.Client, id int64, reason string) tea.Cmd {
+	return doAction(func(ctx context.Context) error {
+		return c.RevokeCert(ctx, id, reason)
+	}, fmt.Sprintf("cert #%d revoked", id))
+}
+
+func doRebuildCRL(c *pkgapi.Client, caName string) tea.Cmd {
+	return doAction(func(ctx context.Context) error {
+		_, err := c.RebuildCRL(ctx, caName)
+		return err
+	}, "CRL rebuilt for "+caName)
+}
+
+func doIssueClientCert(c *pkgapi.Client, inst, cn string) tea.Cmd {
+	return doAction(func(ctx context.Context) error {
+		return c.IssueClientCert(ctx, inst, cn, pkgapi.IssueClientCertRequest{})
+	}, "cert issued for "+cn)
+}
+
+func doImportInstance(c *pkgapi.Client, content, sourcePath string) tea.Cmd {
+	create := true
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		out, err := c.ImportInstance(ctx, pkgapi.ImportInstanceRequest{
+			Content: content, SourcePath: sourcePath, Create: &create,
+		})
+		if err != nil {
+			return actionDoneMsg{err: err}
+		}
+		flash := "imported"
+		if out.Instance.Name != "" {
+			flash += " " + out.Instance.Name
+		} else if sourcePath != "" {
+			flash += " " + sourcePath
+		}
+		return actionDoneMsg{err: nil, flash: flash, refresh: true}
 	}
 }
 

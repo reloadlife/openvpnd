@@ -142,6 +142,9 @@ func RenderInstanceOpts(inst db.Instance, paths Paths, clients []db.Client, opts
 		if inst.PKITLSCryptPath != "" {
 			fmt.Fprintf(&b, "tls-crypt %s\n", inst.PKITLSCryptPath)
 		}
+		if inst.Role == "server" && inst.PKICRLPath != "" {
+			fmt.Fprintf(&b, "crl-verify %s\n", inst.PKICRLPath)
+		}
 	}
 
 	if inst.Cipher != "" {
@@ -152,6 +155,21 @@ func RenderInstanceOpts(inst db.Instance, paths Paths, clients []db.Client, opts
 	}
 	if inst.AuthDigest != "" {
 		fmt.Fprintf(&b, "auth %s\n", inst.AuthDigest)
+	}
+	if inst.TLSVersionMin != "" {
+		fmt.Fprintf(&b, "tls-version-min %s\n", inst.TLSVersionMin)
+	}
+	if inst.TunMTU > 0 {
+		fmt.Fprintf(&b, "tun-mtu %d\n", inst.TunMTU)
+	}
+	if inst.Sndbuf > 0 {
+		fmt.Fprintf(&b, "sndbuf %d\n", inst.Sndbuf)
+	}
+	if inst.Rcvbuf > 0 {
+		fmt.Fprintf(&b, "rcvbuf %d\n", inst.Rcvbuf)
+	}
+	if inst.Role == "client" && inst.AuthUserPass {
+		fmt.Fprintf(&b, "auth-user-pass\n")
 	}
 
 	fmt.Fprintf(&b, "keepalive 10 60\n")
@@ -200,6 +218,9 @@ func renderServer(b *strings.Builder, inst db.Instance, paths Paths) error {
 		}
 		fmt.Fprintf(b, "server %s %s\n", netw, mask)
 	}
+	if inst.ServerIPv6 != "" {
+		fmt.Fprintf(b, "server-ipv6 %s\n", inst.ServerIPv6)
+	}
 	topo := inst.Topology
 	if topo == "" {
 		topo = "subnet"
@@ -208,6 +229,9 @@ func renderServer(b *strings.Builder, inst db.Instance, paths Paths) error {
 
 	if inst.PoolStart != "" && inst.PoolEnd != "" {
 		fmt.Fprintf(b, "ifconfig-pool %s %s\n", inst.PoolStart, inst.PoolEnd)
+	}
+	if inst.MaxClients > 0 {
+		fmt.Fprintf(b, "max-clients %d\n", inst.MaxClients)
 	}
 
 	ccd := paths.CCDDir()
@@ -305,6 +329,21 @@ func RenderCCD(c db.Client, serverNetwork string) string {
 			}
 		}
 		fmt.Fprintf(&b, `push "route %s"`+"\n", r)
+	}
+	// iroute tells the server which subnets live behind this client (site-to-site).
+	for _, r := range c.IRoutes {
+		r = strings.TrimSpace(r)
+		if r == "" {
+			continue
+		}
+		if strings.Contains(r, "/") {
+			if n, m, err := netutil.ServerNetworkToOpenVPN(r); err == nil {
+				fmt.Fprintf(&b, "iroute %s %s\n", n, m)
+				continue
+			}
+		}
+		// Accept "net mask" already expanded
+		fmt.Fprintf(&b, "iroute %s\n", r)
 	}
 	return b.String()
 }

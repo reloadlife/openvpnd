@@ -41,14 +41,24 @@ func TestStoreCRUD(t *testing.T) {
 		CommonName: "alice",
 		Name:       "Alice",
 		StaticIP:   "10.8.0.2",
+		IRoutes:    []string{"192.168.10.0/24"},
 	})
 	require.NoError(t, err)
 	require.Equal(t, "alice", cli.CommonName)
 	require.Equal(t, "ovpn0", cli.InstanceName)
+	require.Equal(t, []string{"192.168.10.0/24"}, cli.IRoutes)
+
+	updated, err := store.UpdateClient(ctx, "ovpn0", "alice", db.Client{
+		Name: "Alice", StaticIP: "10.8.0.2",
+		IRoutes: []string{"192.168.10.0/24", "10.20.0.0/16"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"192.168.10.0/24", "10.20.0.0/16"}, updated.IRoutes)
 
 	clients, err := store.ListClientsByInstance(ctx, "ovpn0")
 	require.NoError(t, err)
 	require.Len(t, clients, 1)
+	require.Equal(t, []string{"192.168.10.0/24", "10.20.0.0/16"}, clients[0].IRoutes)
 
 	require.NoError(t, store.AddEvent(ctx, "info", "test", "ovpn0", "alice", "hello", "{}"))
 	ev, err := store.ListEvents(ctx, 10)

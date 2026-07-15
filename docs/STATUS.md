@@ -16,11 +16,15 @@ openvpnd is under active development. This document tracks what works today vs p
 - [x] Prometheus exporter (instance/client metrics + reconcile histograms)
 - [x] SNMPv2c agent (optional; GET/GETNEXT/GETBULK)
 - [x] Managed PKI: CA create, server/client issue, tls-crypt, wire to instances/clients
+- [x] CRL: revoke cert, rebuild CRL PEM, `crl-verify` on servers, renew leaf
+- [x] Conf import/adopt (`POST /v1/instances/import` + TUI `I`)
+- [x] CCD `iroute` for client-side subnets
+- [x] Typed knobs: max-clients, tls-version-min, tun-mtu, sndbuf/rcvbuf, server-ipv6, auth-user-pass
 - [x] Extensions: plugins, env vars, feature_sets (builtin + custom), multi-binary
 - [x] Client `.ovpn` export (inline PEMs from paths)
 - [x] Presigned profile links + `openvpn://import-profile/` deep links
 - [x] Example configs, systemd unit, docs
-- [x] Full-screen TUI (`openvpnctl` / `openvpnctl tui`) — instances, clients, binaries, stats, events, forms, profile link + QR
+- [x] Full-screen TUI — instances, clients, **PKI**, binaries, stats, events, import, profile QR
 
 ## Not 1:1 with OpenVPN
 
@@ -41,28 +45,27 @@ OpenVPN has hundreds of options. First-class coverage is intentional and incompl
 
 | Area | Status |
 |------|--------|
-| Managed PKI (CA + issue server/client + tls-crypt) | Done (CRL later — tier D) |
-| Conf import / adopt running processes | Planned |
+| Managed PKI (CA + issue + tls-crypt + CRL/revoke/renew) | Done |
+| Conf import / adopt | Done (parse + create; live process adopt later) |
 | TAP / `server-bridge` / VLAN | Not started |
-| IPv6 pools | Not started |
-| `auth-user-pass` / LDAP | Not started |
-| OpenVPN plugins / custom builds | Done (path + feature_sets + multi-binary) |
+| IPv6 pools | Partial (`server-ipv6` typed; no dual-stack pool UX) |
+| `auth-user-pass` / LDAP | Partial (client `auth_user_pass` flag; no LDAP) |
+| CCD `iroute` | Done |
+| OpenVPN plugins / custom builds | Done |
 | Full management API surface | Partial |
 | Bandwidth enforcement (tc/nft) | Fields only |
-| TUI | Done (foundation screens) |
+| TUI PKI | Done |
 | Self-update from releases | Not started |
-| QR codes for profile URLs | Done (TUI profile link) |
-| Test matrix for tier A | Done (`TestTierAFeatureMatrix`) |
+| Test matrix for tier A | Done |
 
 ## Roadmap (priority order)
 
-1. CRL / revoke + renew UX
-2. Conf parse/import + adopt
-3. Richer typed options (common 80% — promote C→A with tests)
-4. CCD/`iroute`/ACL model
-5. TUI PKI screens
-6. Reconciler + host-backend integration tests
-7. Advanced modes (bridge, IPv6, proxies) as needed
+1. Live process adopt + richer conf import (inline PEMs)
+2. TAP / server-bridge
+3. Bandwidth enforcement (tc/nft)
+4. Host-backend integration tests
+5. LDAP / auth-user-pass-verify plugins
+6. Full dual-stack IPv6 pool model
 
 ## Comparison to wireguardd
 

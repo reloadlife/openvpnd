@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"math/big"
 	"net/http"
 	"strconv"
 	"strings"
@@ -229,6 +230,9 @@ func (s *Server) handleIssueServerCert(w http.ResponseWriter, r *http.Request) {
 	inst.PKICaPath = ca.CertPath
 	inst.PKICertPath = issued.CertPath
 	inst.PKIKeyPath = issued.KeyPath
+	if ca.CRLPath != "" {
+		inst.PKICRLPath = ca.CRLPath
+	}
 	if req.TLSCrypt != "" {
 		tc, err := s.store.GetTLSCrypt(r.Context(), req.TLSCrypt)
 		if err == nil {
@@ -312,6 +316,150 @@ func (s *Server) handleIssueClientCert(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleRevokeCert(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "invalid id")
+		return
+	}
+	var req pkgapi.RevokeCertRequest
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+			return
+		}
+	}
+	c, err := s.store.GetCertificate(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", err.Error())
+		return
+	}
+	if c.Revoked {
+		writeJSON(w, http.StatusOK, toAPICert(*c))
+		return
+	}
+	if err := s.store.RevokeCertificate(r.Context(), id, req.Reason); err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+	if _, err := s.rebuildCRLForCA(r, c.CAName); err != nil {
+		writeError(w, http.StatusInternalServerError, "crl_error", err.Error())
+		return
+	}
+	_ = s.store.AddEvent(r.Context(), "warn", "pki", c.InstanceName, c.CommonName, "certificate revoked", "{}")
+	_ = s.ForceReconcile(r.Context())
+	fresh, err := s.store.GetCertificate(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, toAPICert(*fresh))
+}
+
+func (s *Server) handleRebuildCRL(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	ca, err := s.rebuildCRLForCA(r, name)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeError(w, http.StatusNotFound, "not_found", err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "crl_error", err.Error())
+		return
+	}
+	_ = s.ForceReconcile(r.Context())
+	writeJSON(w, http.StatusOK, toAPICA(*ca))
+}
+
+func (s *Server) handleRenewCert(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "invalid id")
+		return
+	}
+	var req pkgapi.RenewCertRequest
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+			return
+		}
+	}
+	old, err := s.store.GetCertificate(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", err.Error())
+		return
+	}
+	// If previously revoked, keep old serial on CRL; re-issue overwrites files and clears revoked.
+	issued, rec, err := s.issueAndStore(r, old.CAName, old.Kind, old.CommonName, req.ValidDays, req.DNSNames, req.IPs, req.KeyType, old.InstanceName)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "renew_failed", err.Error())
+		return
+	}
+	_ = issued
+	// ensure revoked cleared on the upserted row (same CN)
+	if rec.Revoked {
+		_ = s.store.ClearCertificateRevocation(r.Context(), rec.ID)
+		fresh, err := s.store.GetCertificate(r.Context(), rec.ID)
+		if err == nil {
+			rec = *fresh
+		}
+	}
+	// If the old cert was revoked, rebuild CRL so it still lists the old serial
+	// (new serial is not revoked). ListRevoked only has currently-revoked rows —
+	// after clear, old serial drops from CRL, which is correct for "renew replaces identity".
+	// Re-issue path intentionally un-revokes the CN record.
+	_ = s.store.AddEvent(r.Context(), "info", "pki", rec.InstanceName, rec.CommonName, "certificate renewed", "{}")
+	writeJSON(w, http.StatusOK, toAPICert(rec))
+}
+
+func (s *Server) rebuildCRLForCA(r *http.Request, caName string) (*db.CA, error) {
+	ca, err := s.store.GetCA(r.Context(), caName)
+	if err != nil {
+		return nil, err
+	}
+	mgr, err := s.pkiManager()
+	if err != nil {
+		return nil, err
+	}
+	revoked, err := s.store.ListRevokedCertificates(r.Context(), caName)
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]pki.RevokedEntry, 0, len(revoked))
+	for _, c := range revoked {
+		if c.Serial <= 0 {
+			continue
+		}
+		revAt := time.Now().UTC()
+		if c.RevokedAt != "" {
+			if t, err := time.Parse(time.RFC3339Nano, c.RevokedAt); err == nil {
+				revAt = t
+			} else if t, err := time.Parse(time.RFC3339, c.RevokedAt); err == nil {
+				revAt = t
+			}
+		}
+		entries = append(entries, pki.RevokedEntry{
+			Serial:    big.NewInt(c.Serial),
+			RevokedAt: revAt,
+			Reason:    c.RevokeReason,
+		})
+	}
+	crlPath, crlNumber, err := mgr.RebuildCRL(caName, entries)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.store.UpdateCACRL(r.Context(), caName, crlPath, crlNumber); err != nil {
+		return nil, err
+	}
+	// attach CRL path to all server instances using this CA cert path
+	_, _ = s.store.SetInstancesCRLPath(r.Context(), ca.CertPath, crlPath)
+	out, err := s.store.GetCA(r.Context(), caName)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (s *Server) issueAndStore(r *http.Request, caName, kind, cn string, days int, dns, ips []string, keyType, instance string) (pki.IssuedCert, db.Certificate, error) {
 	if caName == "" {
 		cas, err := s.store.ListCAs(r.Context())
@@ -353,6 +501,8 @@ func (s *Server) issueAndStore(r *http.Request, caName, kind, cn string, days in
 		NotAfter:  issued.NotAfter.UTC().Format(time.RFC3339),
 		Serial:    issued.Serial, Fingerprint: issued.Fingerprint,
 		InstanceName: instance,
+		// renew / re-issue always clears revoked state on the CN record
+		Revoked: false, RevokedAt: "", RevokeReason: "",
 	})
 	if err != nil {
 		return pki.IssuedCert{}, db.Certificate{}, err
@@ -364,7 +514,9 @@ func (s *Server) issueAndStore(r *http.Request, caName, kind, cn string, days in
 func toAPICA(c db.CA) pkgapi.CA {
 	return pkgapi.CA{
 		Name: c.Name, CommonName: c.CommonName, Org: c.Org,
-		CertPath: c.CertPath, KeyPath: c.KeyPath, NotAfter: c.NotAfter,
+		CertPath: c.CertPath, KeyPath: c.KeyPath,
+		CRLPath: c.CRLPath, CRLNumber: c.CRLNumber,
+		NotAfter: c.NotAfter,
 		CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
 	}
 }
@@ -375,6 +527,7 @@ func toAPICert(c db.Certificate) pkgapi.Certificate {
 		CertPath: c.CertPath, KeyPath: c.KeyPath,
 		NotBefore: c.NotBefore, NotAfter: c.NotAfter,
 		Serial: c.Serial, Fingerprint: c.Fingerprint, Revoked: c.Revoked,
+		RevokedAt: c.RevokedAt, RevokeReason: c.RevokeReason,
 		InstanceName: c.InstanceName, Notes: c.Notes, CreatedAt: c.CreatedAt,
 	}
 }

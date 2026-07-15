@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -292,4 +293,165 @@ func TestPKICreateAndIssue(t *testing.T) {
 	require.Contains(t, rr.Body.String(), "<ca>")
 	require.Contains(t, rr.Body.String(), "<cert>")
 	require.Contains(t, rr.Body.String(), "explicit-exit-notify")
+
+	// list certs → revoke bob → CRL on CA + crl-verify in export
+	req = httptest.NewRequest(http.MethodGet, "/v1/pki/certs?ca=main", nil)
+	auth(req)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	var certs []pkgapi.Certificate
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &certs))
+	var bobID int64
+	for _, c := range certs {
+		if c.CommonName == "bob" {
+			bobID = c.ID
+			break
+		}
+	}
+	require.NotZero(t, bobID)
+
+	rb, _ := json.Marshal(pkgapi.RevokeCertRequest{Reason: "keyCompromise"})
+	req = httptest.NewRequest(http.MethodPost, "/v1/pki/certs/"+strconv.FormatInt(bobID, 10)+"/revoke", bytes.NewReader(rb))
+	auth(req)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	var revoked pkgapi.Certificate
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &revoked))
+	require.True(t, revoked.Revoked)
+	require.NotEmpty(t, revoked.RevokedAt)
+
+	ca, err := store.GetCA(ctx, "main")
+	require.NoError(t, err)
+	require.NotEmpty(t, ca.CRLPath)
+	require.FileExists(t, ca.CRLPath)
+
+	inst, err = store.GetInstance(ctx, "ovpn0")
+	require.NoError(t, err)
+	require.Equal(t, ca.CRLPath, inst.PKICRLPath)
+
+	req = httptest.NewRequest(http.MethodGet, "/v1/instances/ovpn0/export", nil)
+	auth(req)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	require.Contains(t, rr.Body.String(), "crl-verify "+ca.CRLPath)
+
+	// renew clears revoked
+	req = httptest.NewRequest(http.MethodPost, "/v1/pki/certs/"+strconv.FormatInt(bobID, 10)+"/renew", bytes.NewReader([]byte("{}")))
+	auth(req)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	var renewed pkgapi.Certificate
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &renewed))
+	require.False(t, renewed.Revoked)
+	require.NotEqual(t, revoked.Serial, renewed.Serial)
+}
+
+func TestImportInstance(t *testing.T) {
+	store, err := db.Open(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+
+	ctx := context.Background()
+	require.NoError(t, store.EnsureBinaryDefaults(ctx, map[string]string{
+		"default": "/usr/sbin/openvpn",
+	}))
+
+	cfg := &config.DaemonConfig{}
+	cfg.Auth.Token = "test-token"
+	cfg.OpenVPN.DefaultBinary = "default"
+	cfg.OpenVPN.ConfDir = "/tmp/openvpnd-test/conf"
+	cfg.OpenVPN.RuntimeDir = "/tmp/openvpnd-test/run"
+
+	backend := ovpnbackend.NewMock()
+	cache := stats.NewCache()
+	rec := reconcile.New(store, backend, cache, reconcile.Config{
+		ConfDir: cfg.OpenVPN.ConfDir, RuntimeDir: cfg.OpenVPN.RuntimeDir, DefaultBinary: "default",
+	}, slog.Default())
+	srv := api.NewServer(store, backend, cache, rec, cfg, slog.Default())
+	router := srv.Router()
+	auth := func(req *http.Request) {
+		req.Header.Set("Authorization", "Bearer test-token")
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	minimalServer := `
+port 1195
+proto udp
+dev tun
+topology subnet
+server 10.9.0.0 255.255.255.0
+cipher AES-256-GCM
+auth SHA256
+ca /etc/openvpn/ca.crt
+cert /etc/openvpn/server.crt
+key /etc/openvpn/server.key
+tls-crypt /etc/openvpn/tc.key
+push "dhcp-option DNS 1.1.1.1"
+push "route 10.0.0.0 255.255.0.0"
+management /var/run/openvpn.sock unix
+verb 3
+persist-key
+persist-tun
+writepid /var/run/openvpn.pid
+status /var/run/status 1
+keepalive 10 60
+client-to-client
+`
+
+	// preview only (create=false)
+	noCreate := false
+	previewBody, _ := json.Marshal(pkgapi.ImportInstanceRequest{
+		Content: minimalServer,
+		Create:  &noCreate,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/instances/import", bytes.NewReader(previewBody))
+	auth(req)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	var preview pkgapi.ImportInstanceResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &preview))
+	require.Nil(t, preview.Instance)
+	require.False(t, preview.Created)
+	require.Equal(t, "server", preview.Parsed.Role)
+	require.Equal(t, 1195, preview.Parsed.Port)
+	require.Equal(t, "10.9.0.0/24", preview.Parsed.ServerNetwork)
+	require.Equal(t, []string{"1.1.1.1"}, preview.Parsed.PushDNS)
+	require.Equal(t, []string{"10.0.0.0/16"}, preview.Parsed.PushRoutes)
+	require.Equal(t, "/etc/openvpn/ca.crt", preview.Parsed.PKICaPath)
+	require.Contains(t, preview.Parsed.ExtraDirectives, "client-to-client")
+	require.NotContains(t, preview.Parsed.ExtraDirectives, "management")
+
+	// create
+	doCreate := true
+	createBody, _ := json.Marshal(pkgapi.ImportInstanceRequest{
+		Name:       "imported",
+		Content:    minimalServer,
+		Create:     &doCreate,
+		BinaryName: "default",
+	})
+	req = httptest.NewRequest(http.MethodPost, "/v1/instances/import", bytes.NewReader(createBody))
+	auth(req)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
+	var created pkgapi.ImportInstanceResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &created))
+	require.True(t, created.Created)
+	require.NotNil(t, created.Instance)
+	require.Equal(t, "imported", created.Instance.Name)
+	require.Equal(t, "server", created.Instance.Role)
+	require.Equal(t, 1195, created.Instance.Port)
+	require.Equal(t, "10.9.0.0/24", created.Instance.ServerNetwork)
+	require.Equal(t, "/etc/openvpn/server.crt", created.Instance.PKICertPath)
+	require.Equal(t, []string{"1.1.1.1"}, created.Instance.PushDNS)
+
+	// route must not collide with /instances/{name}
+	list, err := store.ListInstances(ctx)
+	require.NoError(t, err)
+	require.Len(t, list, 1)
 }
