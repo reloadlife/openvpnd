@@ -8,7 +8,7 @@ openvpnd is under active development. This document tracks what works today vs p
 |---------|--------|
 | [v0.1.0](https://github.com/reloadlife/openvpnd/releases/tag/v0.1.0) | Foundation: instances, PKI/CRL, profiles, TUI, import, iroutes |
 | [v0.2.0](https://github.com/reloadlife/openvpnd/releases/tag/v0.2.0) | Roadmap wave: adopt, mgmt API, bandwidth, bridge/TLS/auth knobs, self-update, TUI |
-| [v1.0.0](https://github.com/reloadlife/openvpnd/releases/tag/v1.0.0) | Production posture: backup/restore, multi-token RBAC, hardened readyz, audit, adopt take-over, systemd/prod config |
+| [v1.0.0](https://github.com/reloadlife/openvpnd/releases/tag/v1.0.0) | **Production agent**: backup/RBAC/readyz/audit/take-over; mgmt thrash fix; client adopt+throughput; role-aware bandwidth; node agent for higher-layer multi-tenant controllers |
 
 Production guide: [PRODUCTION.md](PRODUCTION.md).
 
@@ -37,15 +37,19 @@ OpenVPN has hundreds of options. Coverage is intentional tiers A–E — see [OP
 
 Remaining long-tail options still use **`extra_directives`**. Full LDAP product, multi-tenant VLAN NFV, and Windows are out of scope.
 
-## Remaining / follow-ups (lower urgency)
+## Remaining / follow-ups (tracked as GitHub issues post-v1.0.0)
 
-| Topic | Status |
+openvpnd **v1.0.0** is the production **node agent** (single host). Multi-tenant multi-node belongs in a higher-layer controller that drives openvpnd + wireguardd.
+
+| Topic | Notes |
 |-------|--------|
-| Live PID take-over without restart | Done (`take_over` + verified SIGTERM/SIGKILL; `openvpn.adopt_takeover_enabled`) |
-| Full LDAP/IdP product | Partial (script verify + preset; no bundled IdP) |
-| Auto-update without operator | Out of scope (explicit `update` only) |
-| Every manpage flag as typed field | Escape hatch |
+| Controller agent integration | Secure path, sole writer, enrollment — see issues |
+| Event push / webhooks | Controller currently polls |
+| Snapshot apply API | Full node desired-state apply |
+| Control-plane TLS / ACME | Reverse-proxy or sidecar; not VPN PKI |
+| Full LDAP/IdP product | Partial (script verify + preset) |
+| Every manpage flag typed | `extra_directives` escape hatch |
 
 ## Comparison to wireguardd
 
-Same control-plane shape (SQLite SoT, reconciler, REST, ctl); dataplane is OpenVPN processes.
+Same control-plane shape (SQLite SoT, reconciler, REST, ctl); dataplane is OpenVPN processes. Both are intended as **per-node agents** under a shared higher-layer controller.
