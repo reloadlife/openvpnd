@@ -8,7 +8,7 @@ Material lives under `openvpn.pki_dir` (default `/var/lib/openvpnd/pki`), mode `
 
 ```bash
 # 1. Create CA
-openvpnctl pki ca-create default --cn "My VPN CA" --org "homelab"
+openvpnctl pki ca-create default --cn "Example CA" --org "example"
 
 # 2. Server instance + cert + tls-crypt
 openvpnctl instance create ovpn0 --role server --network 10.8.0.0/24

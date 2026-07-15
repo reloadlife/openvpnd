@@ -1,12 +1,15 @@
 # openvpnd
 
-**openvpnd** is a Linux daemon that manages OpenVPN **server and client** instances with a REST API, SQLite desired-state store, process reconciler, multi-binary registry, and Prometheus metrics.
+**openvpnd** is a Linux daemon that manages OpenVPN **server-role and client-role** instances with a REST API, SQLite desired-state store, process reconciler, multi-binary registry, and Prometheus metrics.
 
 **openvpnctl** is the control panel: **full-screen TUI** (default) plus CLI subcommands.
 
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%203.0-blue.svg)](LICENSE)
+How it works: [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) · design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
-> **Status:** [v0.1.0](https://github.com/reloadlife/openvpnd/releases/tag/v0.1.0) shipped. Not 1:1 with every OpenVPN option — see [docs/STATUS.md](docs/STATUS.md) and open [roadmap issues](https://github.com/reloadlife/openvpnd/issues?q=is%3Aissue+is%3Aopen+label%3Aroadmap).
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%203.0-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/reloadlife/openvpnd)](https://github.com/reloadlife/openvpnd/releases)
+
+> **Status:** See [docs/STATUS.md](docs/STATUS.md) for capability matrix and gaps. Not every OpenVPN option is modeled 1:1.
 
 ## Why
 
@@ -37,6 +40,7 @@ Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 | Doc | Contents |
 |-----|----------|
+| [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) | How openvpnd works (operator overview) |
 | [docs/INSTALL.md](docs/INSTALL.md) | Install from source / releases |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Daemon + ctl config reference |
 | [docs/API.md](docs/API.md) | HTTP API routes |
@@ -124,7 +128,7 @@ Each instance stores `binary_name` (or `binary_path` override). Changing the bin
 ## PKI / mTLS
 
 ```bash
-openvpnctl pki ca-create default --cn "Homelab VPN CA"
+openvpnctl pki ca-create default --cn "Example CA"
 openvpnctl instance issue-cert ovpn0 --ca default --tls-crypt
 openvpnctl client issue-cert ovpn0 alice --ca default
 ```
@@ -210,10 +214,22 @@ make test-soak
 
 Contributions: [CONTRIBUTING.md](CONTRIBUTING.md)
 
+## Donations
+
+If this project is useful to you, donations are welcome:
+
+| Network | Address |
+|---------|---------|
+| **Bitcoin** (BTC) | `bc1qy08pk2teys968hphh98rv8y9azeraf2c8vsdm8` |
+| **EVM** (ETH, BNB, USDT, and other EVM chains) | `0x8B6CE1EA8F17f6941F13A621b92Af345a75D8c41` |
+| **TRON** (TRX) | `TGXJToyAsUtw1388jR5aW9ZohjSCDtmKbg` |
+
 ## License
 
 [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0).
 
+If you run a modified version of `openvpnd` as a network service, you must offer the corresponding source to users who interact with it over the network (AGPL §13).
+
 ## Related
 
-Sibling project: [wireguardd](https://github.com/reloadlife/wireguardd) — same control-plane shape for WireGuard.
+Sibling projects with a similar control-plane shape: [wireguardd](https://github.com/reloadlife/wireguardd), [netpolicyd](https://github.com/reloadlife/netpolicyd), [dnsd](https://github.com/reloadlife/dnsd).
