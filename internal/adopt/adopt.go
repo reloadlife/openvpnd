@@ -52,7 +52,8 @@ func discoverOpenVPN(root string) ([]Candidate, error) {
 		if err != nil || pid <= 0 {
 			continue
 		}
-		raw, err := os.ReadFile(filepath.Join(root, e.Name(), "cmdline"))
+		procDir := filepath.Join(root, e.Name())
+		raw, err := os.ReadFile(filepath.Join(procDir, "cmdline"))
 		if err != nil || len(raw) == 0 {
 			continue
 		}
@@ -60,15 +61,32 @@ func discoverOpenVPN(root string) ([]Candidate, error) {
 		if len(argv) == 0 {
 			continue
 		}
-		if !IsOpenVPNArgv(argv) {
+		// Prefer /proc/pid/exe for binary identity (covers openvpn-linux, wrappers).
+		exePath := ""
+		if link, err := os.Readlink(filepath.Join(procDir, "exe")); err == nil {
+			exePath = link
+		}
+		if !IsOpenVPNArgv(argv) && !isOpenVPNBinary(exePath) {
+			continue
+		}
+		// Never report openvpnd / openvpnctl themselves.
+		if isOpenVPNDarg(argv[0]) || isOpenVPNDarg(exePath) {
 			continue
 		}
 		binary := argv[0]
+		if exePath != "" {
+			binary = exePath
+		}
 		confPath := ConfigPathFromArgv(argv)
 		// Resolve relative conf against process cwd when possible.
 		if confPath != "" && !filepath.IsAbs(confPath) {
-			if cwd, err := os.Readlink(filepath.Join(root, e.Name(), "cwd")); err == nil && cwd != "" {
-				confPath = filepath.Join(cwd, confPath)
+			if cwd, err := os.Readlink(filepath.Join(procDir, "cwd")); err == nil && cwd != "" {
+				confPath = filepath.Clean(filepath.Join(cwd, confPath))
+			}
+		}
+		if confPath != "" {
+			if abs, err := filepath.Abs(confPath); err == nil {
+				confPath = abs
 			}
 		}
 		out = append(out, Candidate{
@@ -79,6 +97,11 @@ func discoverOpenVPN(root string) ([]Candidate, error) {
 		})
 	}
 	return out, nil
+}
+
+func isOpenVPNDarg(p string) bool {
+	base := strings.ToLower(filepath.Base(p))
+	return base == "openvpnd" || base == "openvpnctl" || strings.Contains(base, "openvpnd")
 }
 
 // SplitCmdline splits a /proc/<pid>/cmdline buffer (NUL-separated args,
@@ -116,17 +139,23 @@ func IsOpenVPNArgv(argv []string) bool {
 }
 
 func isOpenVPNBinary(argv0 string) bool {
+	if argv0 == "" {
+		return false
+	}
 	base := filepath.Base(argv0)
-	// strip version suffixes like openvpn-2.6
 	base = strings.ToLower(base)
+	// control plane — never
+	if base == "openvpnd" || base == "openvpnctl" || strings.Contains(base, "openvpnd") {
+		return false
+	}
 	if base == "openvpn" {
 		return true
 	}
+	// openvpn-linux, openvpn-2.6, openvpn.static, openvpn26, …
 	if strings.HasPrefix(base, "openvpn-") || strings.HasPrefix(base, "openvpn.") {
 		return true
 	}
-	// some installs: /usr/local/sbin/openvpn26
-	if strings.Contains(base, "openvpn") && !strings.Contains(base, "openvpnd") && !strings.Contains(base, "openvpnctl") {
+	if strings.Contains(base, "openvpn") {
 		return true
 	}
 	return false

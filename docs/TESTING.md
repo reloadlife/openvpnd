@@ -57,6 +57,23 @@ make test-race
 make test-integration
 ```
 
+## CI (GitHub Actions)
+
+Workflows live under [`.github/workflows/`](../.github/workflows/):
+
+| Workflow | Trigger | What it runs |
+|----------|---------|--------------|
+| **`ci.yml`** | push / PR → `main` | `go mod download` → `go test -race -count=1 ./...` → `TestAllManageabilityFeatures` → `make build` |
+| **`smoke.yml`** | tag `v*` + `workflow_dispatch` | `make build`, start daemon with `use_mock_backend: true` on `127.0.0.1:51980`, `curl` `/healthz`, `/readyz`, `/v1/version` (bearer), then `make test-verify` if present |
+| **`release.yml`** | tag `v*` | linux/amd64 binaries with `-ldflags` version from tag; draft/non-draft GitHub Release via `softprops/action-gh-release` with `tar.gz` + `SHA256SUMS` |
+
+Notes:
+
+- Actions: `actions/checkout@v4`, `actions/setup-go@v5` (Go **1.24.x**).
+- No project secrets required; release uses the default `GITHUB_TOKEN`.
+- Unit/API suites are mock-only. Host OpenVPN (`make test-integration`) stays optional / self-hosted — see above.
+- Local equivalent of CI: `make test` then `make build`; smoke path matches the mock config in the README quick start.
+
 ## Coverage targets (policy)
 
 | Package | Target | Notes |

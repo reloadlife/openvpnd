@@ -22,12 +22,21 @@ func TestSplitCmdlineSpaces(t *testing.T) {
 }
 
 func TestIsOpenVPNArgv(t *testing.T) {
+	require.True(t, adopt.IsOpenVPNArgv([]string{"openvpn-linux", "/opt/homelab/germany.ovpn"}))
+	require.True(t, adopt.IsOpenVPNArgv([]string{"/usr/bin/openvpn-linux", "/x.ovpn"}))
 	require.True(t, adopt.IsOpenVPNArgv([]string{"/usr/sbin/openvpn", "--config", "x"}))
 	require.True(t, adopt.IsOpenVPNArgv([]string{"openvpn"}))
 	require.True(t, adopt.IsOpenVPNArgv([]string{"/opt/openvpn-2.6/sbin/openvpn", "--config", "x"}))
+	require.False(t, adopt.IsOpenVPNArgv([]string{"openvpnd", "run"}))
+	require.False(t, adopt.IsOpenVPNArgv([]string{"openvpnctl"}))
 	require.False(t, adopt.IsOpenVPNArgv([]string{"/usr/bin/openvpnd"}))
 	require.False(t, adopt.IsOpenVPNArgv([]string{"bash", "-c", "openvpn"}))
 	require.False(t, adopt.IsOpenVPNArgv(nil))
+}
+
+func TestConfigPathBareOvpnLinux(t *testing.T) {
+	require.Equal(t, "/opt/homelab/germany.ovpn",
+		adopt.ConfigPathFromArgv([]string{"openvpn-linux", "/opt/homelab/germany.ovpn"}))
 }
 
 func TestConfigPathFromArgv(t *testing.T) {

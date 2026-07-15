@@ -188,7 +188,11 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cas = msg.cas
 			m.certs = msg.certs
 			m.tlsCrypts = msg.tlsCrypts
+			m.discoverCands = filterUnmanaged(msg.discovered, msg.instances)
 			m.status = "ok"
+			if n := len(m.discoverCands); n > 0 && m.tab == tabInstances {
+				m.status = fmt.Sprintf("ok · %d host openvpn live", n)
+			}
 			if m.cursor >= m.rowCount() {
 				m.cursor = max(0, m.rowCount()-1)
 			}
@@ -405,7 +409,8 @@ func (m rootModel) filteredCerts() []pkgapi.Certificate {
 func (m rootModel) rowCount() int {
 	switch m.tab {
 	case tabInstances:
-		return len(m.instances)
+		// managed instances + live unmanaged host processes
+		return len(m.instances) + len(m.discoverCands)
 	case tabClients:
 		return len(m.clients)
 	case tabPKI:
@@ -949,6 +954,15 @@ func (m rootModel) serverNames() []string {
 func (m rootModel) openDetail() (tea.Model, tea.Cmd) {
 	switch m.tab {
 	case tabInstances:
+		// Unmanaged live processes sit after managed instances in the list.
+		if m.cursor >= len(m.instances) {
+			idx := m.cursor - len(m.instances)
+			if idx < 0 || idx >= len(m.discoverCands) {
+				return m, nil
+			}
+			c := m.discoverCands[idx]
+			return m.openAdoptForm(c.ConfPath, c.PID)
+		}
 		if m.cursor < 0 || m.cursor >= len(m.instances) {
 			return m, nil
 		}
@@ -1612,7 +1626,7 @@ func (m rootModel) listHelp() string {
 	base := "1-6 tabs  ·  j/k  ·  enter detail  ·  n new  ·  r refresh  ·  R reconcile  ·  q quit"
 	switch m.tab {
 	case tabInstances:
-		return base + "  ·  u/d up/down  ·  I import  ·  A adopt  ·  D delete"
+		return base + "  ·  u/d up/down  ·  I import  ·  A discover  ·  enter adopt live  ·  D delete"
 	case tabClients:
 		return base + "  ·  s/S suspend/resume  ·  D delete"
 	case tabPKI:
@@ -1701,8 +1715,8 @@ func (m rootModel) viewInstanceList(w int) string {
 		padCell("RX", cw[6]), padCell("TX", cw[7]), padCell("RX/s", cw[8]), padCell("TX/s", cw[9]))
 	b.WriteString(headerStyle.Render(hdr))
 	b.WriteString("\n")
-	if len(m.instances) == 0 {
-		b.WriteString(dimStyle.Render("(no instances — press n to create)"))
+	if len(m.instances) == 0 && len(m.discoverCands) == 0 {
+		b.WriteString(dimStyle.Render("(no instances — press n to create · live openvpn auto-discovers here)"))
 		b.WriteString("\n")
 		return b.String()
 	}
@@ -1728,15 +1742,93 @@ func (m rootModel) viewInstanceList(w int) string {
 		if i == m.cursor {
 			b.WriteString(selStyle.Width(w).Render(line))
 		} else {
-			// colour state without breaking width much
-			if inst.Up {
-				// already plain text for alignment
-			}
 			b.WriteString(line)
 		}
 		b.WriteString("\n")
 	}
+
+	// Live host processes not yet managed by openvpnd (auto-discovered each refresh).
+	if len(m.discoverCands) > 0 {
+		b.WriteString("\n")
+		b.WriteString(sectionStyle.Render(fmt.Sprintf("▸ Host OpenVPN (live, unmanaged · %d) — enter to adopt", len(m.discoverCands))))
+		b.WriteString("\n")
+		cw2 := colWidths(w-2, []int{8, 12, 28, 40}, 3)
+		hdr2 := fmt.Sprintf("%s %s %s %s",
+			padCell("PID", cw2[0]), padCell("BINARY", cw2[1]),
+			padCell("CONF", cw2[2]), padCell("CMDLINE", cw2[3]))
+		b.WriteString(headerStyle.Render(hdr2))
+		b.WriteString("\n")
+		for i, c := range m.discoverCands {
+			bin := filepath.Base(c.Binary)
+			conf := c.ConfPath
+			if conf == "" {
+				conf = "(no conf path)"
+			}
+			line := fmt.Sprintf("%s %s %s %s",
+				padCell(fmt.Sprintf("%d", c.PID), cw2[0]),
+				padCell(bin, cw2[1]),
+				padCell(conf, cw2[2]),
+				padCell(c.Cmdline, cw2[3]),
+			)
+			row := len(m.instances) + i
+			if row == m.cursor {
+				b.WriteString(selStyle.Width(w).Render(line))
+			} else {
+				b.WriteString(warnStyle.Render(line))
+			}
+			b.WriteString("\n")
+		}
+	}
 	return b.String()
+}
+
+// filterUnmanaged drops discover candidates already represented by managed instances
+// (matched via "# adopted from <path>" breadcrumb or same basename as instance name).
+func filterUnmanaged(cands []pkgapi.OpenVPNCandidate, insts []pkgapi.Instance) []pkgapi.OpenVPNCandidate {
+	if len(cands) == 0 {
+		return cands
+	}
+	adopted := map[string]struct{}{}
+	names := map[string]struct{}{}
+	for _, i := range insts {
+		names[strings.ToLower(i.Name)] = struct{}{}
+		if i.PID > 0 && i.Up {
+			// live managed PID — skip same pid
+			// handled below
+		}
+		// "# adopted from /path"
+		const prefix = "# adopted from "
+		for _, line := range strings.Split(i.ExtraDirectives, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, prefix) {
+				adopted[strings.TrimSpace(strings.TrimPrefix(line, prefix))] = struct{}{}
+			}
+		}
+	}
+	managedPID := map[int]struct{}{}
+	for _, i := range insts {
+		if i.PID > 0 {
+			managedPID[i.PID] = struct{}{}
+		}
+	}
+	var out []pkgapi.OpenVPNCandidate
+	for _, c := range cands {
+		if _, ok := managedPID[c.PID]; ok {
+			continue
+		}
+		if c.ConfPath != "" {
+			if _, ok := adopted[c.ConfPath]; ok {
+				continue
+			}
+			base := strings.TrimSuffix(strings.ToLower(filepath.Base(c.ConfPath)), filepath.Ext(c.ConfPath))
+			if _, ok := names[base]; ok {
+				// likely already imported under same name
+				continue
+			}
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
 func (m rootModel) viewClientList(w int) string {

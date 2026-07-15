@@ -1,0 +1,69 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & publish release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache: true
+
+      - name: Resolve version
+        id: ver
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Build linux/amd64 binaries
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          MODULE=github.com/reloadlife/openvpnd
+          COMMIT_SHORT="$(git rev-parse --short HEAD)"
+          BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          LDFLAGS="-s -w \
+            -X ${MODULE}/internal/version.Version=${VERSION} \
+            -X ${MODULE}/internal/version.Commit=${COMMIT_SHORT} \
+            -X ${MODULE}/internal/version.Date=${BUILD_DATE}"
+
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o dist/openvpnd ./cmd/openvpnd
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o dist/openvpnctl ./cmd/openvpnctl
+
+          ARCHIVE="openvpnd_${VERSION}_linux_amd64.tar.gz"
+          tar -C dist -czf "dist/${ARCHIVE}" openvpnd openvpnctl
+          (
+            cd dist
+            sha256sum "${ARCHIVE}" openvpnd openvpnctl > SHA256SUMS
+          )
+          echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: ${{ steps.ver.outputs.tag }}
+          draft: false
+          generate_release_notes: true
+          files: |
+            dist/${{ env.ARCHIVE }}
+            dist/SHA256SUMS
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -26,7 +26,9 @@ type dataMsg struct {
 	cas       []pkgapi.CA
 	certs     []pkgapi.Certificate
 	tlsCrypts []pkgapi.TLSCryptKey
-	err       error
+	// discovered live openvpn processes on the daemon host (soft-fail)
+	discovered []pkgapi.OpenVPNCandidate
+	err        error
 }
 
 type actionDoneMsg struct {
@@ -109,6 +111,10 @@ func fetchData(c *pkgapi.Client, gen uint64) tea.Cmd {
 		}
 		if keys, err := c.ListTLSCrypt(ctx); err == nil {
 			msg.tlsCrypts = keys
+		}
+		// Auto-discover live OpenVPN on daemon host (never fail whole refresh).
+		if cands, err := c.DiscoverOpenVPN(ctx); err == nil {
+			msg.discovered = cands
 		}
 		return msg
 	}
