@@ -971,7 +971,7 @@ func (m rootModel) openDetail() (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			c := m.discoverCands[idx]
-			return m.openAdoptForm(c.ConfPath, c.PID)
+			return m.openAdoptForm(c.ConfPath, c.PID, c.Binary)
 		}
 		if m.cursor < 0 || m.cursor >= len(m.instances) {
 			return m, nil
@@ -1168,21 +1168,21 @@ func (m rootModel) handleDiscoverKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.startDiscover()
 	case "n":
 		// manual adopt without a discover pick
-		return m.openAdoptForm("", 0)
+		return m.openAdoptForm("", 0, "")
 	case "enter", "l", "a":
 		if len(m.discoverCands) == 0 {
-			return m.openAdoptForm("", 0)
+			return m.openAdoptForm("", 0, "")
 		}
 		if m.discoverCursor < 0 || m.discoverCursor >= len(m.discoverCands) {
 			return m, nil
 		}
 		c := m.discoverCands[m.discoverCursor]
-		return m.openAdoptForm(c.ConfPath, c.PID)
+		return m.openAdoptForm(c.ConfPath, c.PID, c.Binary)
 	}
 	return m, nil
 }
 
-func (m rootModel) openAdoptForm(confPath string, pid int) (tea.Model, tea.Cmd) {
+func (m rootModel) openAdoptForm(confPath string, pid int, binaryPath string) (tea.Model, tea.Cmd) {
 	vals := map[string]string{
 		"conf_path": confPath,
 		"take_over": "y",
@@ -1190,8 +1190,11 @@ func (m rootModel) openAdoptForm(confPath string, pid int) (tea.Model, tea.Cmd) 
 	if pid > 0 {
 		vals["pid"] = fmt.Sprintf("%d", pid)
 	}
+	if binaryPath != "" {
+		vals["binary_path"] = binaryPath
+	}
 	m.form = newForm("Adopt instance from host conf", adoptInstanceFields(), vals)
-	m.form.note = "Daemon reads conf_path on its host. take_over stops a verified openvpn PID (SIGTERM/SIGKILL), enables the instance, and reconciles."
+	m.form.note = "Uses conf + binary from host. take_over stops verified openvpn PID then starts under openvpnd with management socket."
 	m.form.SetSize(m.width, m.formAreaHeight())
 	m.mode = modeAdoptForm
 	return m, nil
@@ -1239,6 +1242,7 @@ func (m rootModel) submitAdoptForm() (tea.Model, tea.Cmd) {
 		ConfPath:       confPath,
 		Name:           strings.TrimSpace(v["name"]),
 		PublicEndpoint: strings.TrimSpace(v["public_endpoint"]),
+		BinaryPath:     strings.TrimSpace(v["binary_path"]),
 		TakeOver:       truthy(v["take_over"]),
 		PID:            pid,
 	}

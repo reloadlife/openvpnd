@@ -47,6 +47,12 @@ func (p Paths) CCDDir() string {
 	return filepath.Join(p.ConfDir, "ccd", p.Name)
 }
 
+// TmpDir is a writable temp directory for openvpn under RuntimeDir
+// (avoids systemd ProtectSystem=/tmp read-only failures).
+func (p Paths) TmpDir() string {
+	return filepath.Join(p.RuntimeDir, "tmp")
+}
+
 // RenderResult is generated conf content.
 type RenderResult struct {
 	Content string
@@ -213,6 +219,8 @@ func RenderInstanceOpts(inst db.Instance, paths Paths, clients []db.Client, opts
 	fmt.Fprintf(&b, "persist-key\n")
 	fmt.Fprintf(&b, "persist-tun\n")
 
+	// tmp-dir must be writable under ProtectSystem=strict (systemd remounts /tmp RO).
+	fmt.Fprintf(&b, "tmp-dir %s\n", paths.TmpDir())
 	fmt.Fprintf(&b, "writepid %s\n", paths.PIDFile())
 	fmt.Fprintf(&b, "status %s 1\n", paths.StatusFile())
 	fmt.Fprintf(&b, "management %s unix\n", paths.MgmtSock())

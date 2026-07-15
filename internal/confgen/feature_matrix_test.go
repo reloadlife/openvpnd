@@ -234,9 +234,10 @@ func TestTierAFeatureMatrix(t *testing.T) {
 			want: []string{"# extensions", "tun-mtu 1400", "sndbuf 0"},
 		},
 		{
-			name: "control plane writepid status management keepalive",
+			name: "control plane writepid status management keepalive tmp-dir",
 			mutate: func(i *db.Instance) {},
 			want: []string{
+				"tmp-dir /run/openvpnd/tmp",
 				"writepid /run/openvpnd/ovpn0.pid",
 				"status /run/openvpnd/ovpn0.status 1",
 				"management /run/openvpnd/ovpn0.mgmt.sock unix",

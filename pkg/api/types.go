@@ -269,6 +269,9 @@ type AdoptInstanceRequest struct {
 	Name           string `json:"name,omitempty"`
 	Enabled        *bool  `json:"enabled,omitempty"`
 	BinaryName     string `json:"binary_name,omitempty"`
+	// BinaryPath is absolute path to the openvpn binary discovered on the host
+	// (e.g. /usr/bin/openvpn-linux). Registered automatically when set.
+	BinaryPath     string `json:"binary_path,omitempty"`
 	TakeOver       bool   `json:"take_over,omitempty"`
 	PublicEndpoint string `json:"public_endpoint,omitempty"`
 	// PID is optional (e.g. from discover). With take_over=true it is the process

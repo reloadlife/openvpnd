@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -176,7 +177,10 @@ func (b *HostBackend) EnsureInstance(ctx context.Context, d DesiredInstance) err
 				return fmt.Errorf("pre_up: %w", err)
 			}
 		}
-		// remove stale mgmt socket
+		// ensure runtime tmp (openvpn tmp-dir) and remove stale mgmt socket
+		if d.PIDPath != "" {
+			_ = os.MkdirAll(filepath.Join(filepath.Dir(d.PIDPath), "tmp"), 0o755)
+		}
 		_ = os.Remove(d.MgmtPath)
 		cmd := exec.CommandContext(ctx, d.BinaryPath, "--config", d.ConfPath)
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -208,16 +212,44 @@ func (b *HostBackend) EnsureInstance(ctx context.Context, d DesiredInstance) err
 			}
 			b.mu.Unlock()
 		}()
-		// prefer pid file if written
-		time.Sleep(200 * time.Millisecond)
-		if pid := readPIDFile(d.PIDPath); pid > 0 {
-			st.pid = pid
+		// prefer pid file if written; wait for management socket (up to ~3s)
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			if pid := readPIDFile(d.PIDPath); pid > 0 {
+				st.pid = pid
+			}
+			if d.MgmtPath != "" {
+				if _, err := os.Stat(d.MgmtPath); err == nil {
+					break
+				}
+			}
+			// process died early — surface last log lines
+			if !processAlive(st.pid) {
+				tail := tailFile(logPath, 8)
+				if tail != "" {
+					return fmt.Errorf("openvpn exited during start:\n%s", tail)
+				}
+				return fmt.Errorf("openvpn exited during start (see %s)", logPath)
+			}
+			time.Sleep(100 * time.Millisecond)
 		}
 		if d.AllowHooks && d.PostUp != "" {
 			_ = runHook(ctx, d.PostUp)
 		}
 	}
 	return nil
+}
+
+func tailFile(path string, n int) string {
+	b, err := os.ReadFile(path)
+	if err != nil || len(b) == 0 {
+		return ""
+	}
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (b *HostBackend) StopInstance(ctx context.Context, name string) error {

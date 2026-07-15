@@ -223,12 +223,48 @@ func (s *Server) handleAdoptInstance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Materialize inline PEMs (same as import) so client/server certs are available.
+	instName := strings.TrimSpace(req.Name)
+	if instName == "" {
+		instName = strings.TrimSpace(result.Request.Name)
+	}
+	if result.Parsed.HasInline() {
+		if name, err := s.resolveImportName(r, instName); err == nil {
+			instName = name
+			if strings.TrimSpace(s.cfg.OpenVPN.PKIDir) != "" {
+				dest := filepath.Join(s.cfg.OpenVPN.PKIDir, "imported", name)
+				if err := result.Parsed.Materialize(confimport.MaterializeOptions{DestDir: dest}); err != nil {
+					writeError(w, http.StatusInternalServerError, "materialize_error", err.Error())
+					return
+				}
+				// Rebuild create request with materialized paths.
+				result.Request = result.Parsed.ToCreateRequest()
+				result.Request.Name = name
+				result.Request.ExtraDirectives = "# adopted from " + confPath + "\n" + result.Request.ExtraDirectives
+				result.Warnings = append([]string(nil), result.Parsed.Warnings...)
+			}
+		}
+	}
+
 	createReq := result.Request
 	if req.Enabled != nil {
 		createReq.Enabled = req.Enabled
 	}
 	if req.BinaryName != "" {
 		createReq.BinaryName = req.BinaryName
+	}
+	// Optional absolute binary override from discover (e.g. /usr/bin/openvpn-linux).
+	if bp := strings.TrimSpace(req.BinaryPath); bp != "" {
+		createReq.BinaryPath = bp
+		if createReq.BinaryName == "" {
+			createReq.BinaryName = "adopted"
+		}
+		// Ensure registry entry so validation passes.
+		if s.store != nil {
+			_, _ = s.store.UpsertBinary(r.Context(), db.Binary{
+				Name: createReq.BinaryName, Path: bp, Notes: "auto from adopt discover",
+			})
+		}
 	}
 	if req.PublicEndpoint != "" {
 		createReq.PublicEndpoint = req.PublicEndpoint

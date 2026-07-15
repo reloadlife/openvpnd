@@ -851,14 +851,19 @@ func adoptInstanceFields() []fieldDef {
 			Tip:  "Optional host:port written into future client profiles for this server.",
 		},
 		{
+			Key: "binary_path", Label: "Binary",
+			Hint: "/usr/bin/openvpn-linux",
+			Tip:  "Absolute openvpn binary from discover (forks like openvpn-linux for udp-stuffing).",
+		},
+		{
 			Key: "take_over", Label: "Take over", Kind: fieldBool,
-			Hint: "document intent to manage process",
-			Tip:  "ON notes that you intend to stop the foreign process and run under openvpnd (v1 does not force-kill).",
+			Hint: "stop foreign PID then start managed",
+			Tip:  "ON: SIGTERM/SIGKILL verified openvpn PID, then openvpnd starts with management socket.",
 		},
 		{
 			Key: "pid", Label: "PID",
-			Hint: "optional from discover",
-			Tip:  "Optional process id from discover (stored in notes only).",
+			Hint: "from discover",
+			Tip:  "Process id from discover — used when Take over is ON.",
 		},
 	}
 }
