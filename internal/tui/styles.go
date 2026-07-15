@@ -48,4 +48,10 @@ var (
 	badgeConn   = lipgloss.NewStyle().Foreground(cBadgeFg).Background(cConnBg).Padding(0, 1).Bold(true)
 	badgeSrv    = lipgloss.NewStyle().Foreground(cSelFg).Background(cSrvBg).Padding(0, 1).Bold(true)
 	badgeCli    = lipgloss.NewStyle().Foreground(cSelFg).Background(cCliBg).Padding(0, 1).Bold(true)
+	sectionStyle = lipgloss.NewStyle().Bold(true).Foreground(cAccent).MarginTop(1).MarginBottom(0)
+	tipBoxStyle  = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(cAccent2).
+			Padding(0, 1).
+			MarginBottom(1)
 )

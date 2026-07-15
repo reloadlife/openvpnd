@@ -21,7 +21,9 @@ const (
 type fieldDef struct {
 	Key          string
 	Label        string
-	Hint         string
+	Hint         string   // short placeholder / example
+	Tip          string   // longer “what is this?” shown when focused
+	Section      string   // section header when this field starts a group
 	Width        int
 	Kind         string
 	Options      []string
@@ -386,7 +388,20 @@ func (f formModel) View() string {
 		b.WriteString(okStyle.Render("  " + f.note))
 		b.WriteString("\n\n")
 	}
+
+	// Tip box for focused field (always visible near top while scrolling fields)
+	if len(f.fields) > 0 && f.focus >= 0 && f.focus < len(f.fields) {
+		b.WriteString(f.renderTipBox(f.fields[f.focus]))
+		b.WriteString("\n")
+	}
+
+	lastSection := ""
 	for i, field := range f.fields {
+		if field.Section != "" && field.Section != lastSection {
+			lastSection = field.Section
+			b.WriteString(sectionStyle.Render("▸ " + field.Section))
+			b.WriteString("\n")
+		}
 		focused := i == f.focus
 		var label string
 		if focused {
@@ -439,12 +454,8 @@ func (f formModel) View() string {
 		b.WriteString("  ")
 		b.WriteString(val)
 		b.WriteString("\n")
-		if field.Hint != "" && focused {
-			b.WriteString(dimStyle.Render("                    " + field.Hint))
-			b.WriteString("\n")
-		}
-		b.WriteString("\n")
 	}
+	b.WriteString("\n")
 	help := f.help
 	if help == "" {
 		help = "tab/↑↓ move  ·  ←/→ role & toggles  ·  space/ctrl+o file browse  ·  enter save  ·  esc cancel"
@@ -463,60 +474,290 @@ func (f formModel) View() string {
 	return box.Render(inner)
 }
 
+func (f formModel) renderTipBox(field fieldDef) string {
+	tip := strings.TrimSpace(field.Tip)
+	if tip == "" {
+		tip = strings.TrimSpace(field.Hint)
+	}
+	if tip == "" {
+		return ""
+	}
+	head := "💡 " + field.Label
+	if field.Section != "" {
+		head += "  ·  " + field.Section
+	}
+	// soft-wrap tip to form width
+	wrapW := f.width - 10
+	if wrapW < 40 {
+		wrapW = 56
+	}
+	if wrapW > 100 {
+		wrapW = 100
+	}
+	body := wordWrap(tip, wrapW)
+	if field.Hint != "" && field.Tip != "" && field.Hint != field.Tip {
+		body += "\n" + dimStyle.Render("example: "+field.Hint)
+	}
+	if field.Kind == fieldFile {
+		body += "\n" + dimStyle.Render("tip: press space or ctrl+o to browse files")
+	}
+	if field.Kind == fieldSelect || field.Kind == fieldBool {
+		body += "\n" + dimStyle.Render("tip: use ←/→ or space to change")
+	}
+	inner := headerStyle.Render(head) + "\n" + valueStyle.Render(body)
+	return tipBoxStyle.Width(min(f.width-4, wrapW+6)).Render(inner) + "\n"
+}
+
+func wordWrap(s string, width int) string {
+	if width < 20 {
+		width = 20
+	}
+	words := strings.Fields(s)
+	if len(words) == 0 {
+		return s
+	}
+	var lines []string
+	var cur string
+	for _, w := range words {
+		if cur == "" {
+			cur = w
+			continue
+		}
+		if len(cur)+1+len(w) > width {
+			lines = append(lines, cur)
+			cur = w
+			continue
+		}
+		cur += " " + w
+	}
+	if cur != "" {
+		lines = append(lines, cur)
+	}
+	return strings.Join(lines, "\n")
+}
+
 func instanceCreateFields(binaries []string) []fieldDef {
 	bins := append([]string{}, binaries...)
 	if len(bins) == 0 {
 		bins = []string{"default"}
 	}
 	return []fieldDef{
-		// common
-		{Key: "name", Label: "Name", Hint: "empty/auto → ovpn0, ovpn1…"},
-		{Key: "role", Label: "Role", Kind: fieldSelect, Options: []string{"server", "client"}, Hint: "←/→ switches field set"},
-		{Key: "binary", Label: "Binary", Kind: fieldSelect, Options: bins},
-		{Key: "proto", Label: "Proto", Kind: fieldSelect, Options: []string{"udp", "tcp", "udp4", "tcp4", "udp6", "tcp6"}},
-		{Key: "dev_type", Label: "Dev type", Kind: fieldSelect, Options: []string{"tun", "tap"}},
-		{Key: "device", Label: "Device", Hint: "optional e.g. tun0 / ovpnc0"},
-		{Key: "auth_mode", Label: "Auth mode", Kind: fieldSelect, Options: []string{"pki", "static_key"}},
+		// ── Basics ──
+		{
+			Key: "name", Label: "Name", Section: "Basics",
+			Hint: "empty → ovpn0, ovpn1…",
+			Tip:  "Short unique id for this instance (letters, numbers, _ -). Leave empty and openvpnd assigns ovpn0, ovpn1, … automatically.",
+		},
+		{
+			Key: "role", Label: "Role", Kind: fieldSelect, Options: []string{"server", "client"},
+			Hint: "←/→ switches the whole form",
+			Tip:  "server = accept VPN peers (listen + tunnel pool). client = this host dials out to a remote OpenVPN server. Changing role swaps which fields you see.",
+		},
+		{
+			Key: "binary", Label: "Binary", Kind: fieldSelect, Options: bins,
+			Hint: "registered openvpn builds",
+			Tip:  "Which OpenVPN executable runs this instance. Use the default system build, or a custom/forked binary (e.g. UDP stuffing) registered under Binaries.",
+		},
+		{
+			Key: "proto", Label: "Proto", Kind: fieldSelect, Options: []string{"udp", "tcp", "udp4", "tcp4", "udp6", "tcp6"},
+			Hint: "udp is usual",
+			Tip:  "Transport protocol for the VPN tunnel. UDP is faster/lower latency; TCP can help on hostile networks. Must match the peer (server and clients).",
+		},
+		{
+			Key: "dev_type", Label: "Dev type", Kind: fieldSelect, Options: []string{"tun", "tap"},
+			Hint: "tun = layer-3 (usual)",
+			Tip:  "tun routes IP packets (normal VPN). tap bridges Ethernet frames (rarer; needed for some LAN-style use). Prefer tun unless you know you need bridge mode.",
+		},
+		{
+			Key: "device", Label: "Device",
+			Hint: "optional e.g. tun0",
+			Tip:  "Optional fixed interface name (tun0, ovpns0…). Leave empty and OpenVPN picks one. Set only if you need a stable name for firewall rules.",
+		},
+		{
+			Key: "auth_mode", Label: "Auth mode", Kind: fieldSelect, Options: []string{"pki", "static_key"},
+			Hint: "pki = certs (recommended)",
+			Tip:  "pki = modern TLS with CA/cert/key (recommended). static_key = shared secret only (simple site-to-site; weaker operational story).",
+		},
 
-		// server-only
-		{Key: "port", Label: "Listen port", Hint: "empty → next free from 1194", Roles: []string{"server"}},
-		{Key: "local_bind", Label: "Local bind", Hint: "optional IP to bind", Roles: []string{"server"}},
-		{Key: "network", Label: "Server net", Hint: "empty → free 10.x.0.0/24", Roles: []string{"server"}},
-		{Key: "topology", Label: "Topology", Kind: fieldSelect, Options: []string{"subnet", "net30", "p2p"}, Roles: []string{"server"}},
-		{Key: "public_endpoint", Label: "Public EP", Hint: "vpn.example.com:1194 (client profiles)", Roles: []string{"server"}},
-		{Key: "push_dns", Label: "Push DNS", Hint: "1.1.1.1,8.8.8.8", Roles: []string{"server"}},
-		{Key: "push_routes", Label: "Push routes", Hint: "10.0.0.0/8,192.168.0.0/16", Roles: []string{"server"}},
-		{Key: "push_domain", Label: "Push domain", Hint: "internal.lan", Roles: []string{"server"}},
-		{Key: "redirect_gw", Label: "Redirect GW", Kind: fieldBool, Roles: []string{"server"}},
-		{Key: "issue_cert", Label: "Issue cert", Hint: "auto mTLS server cert from CA", Kind: fieldBool, Roles: []string{"server"}},
-		{Key: "create_ca", Label: "Create CA", Hint: "if no CA exists, create default", Kind: fieldBool, Roles: []string{"server"}},
-		{Key: "ca_name", Label: "CA name", Hint: "default first CA", Roles: []string{"server"}},
-		{Key: "server_cn", Label: "Server CN", Hint: "default public EP host / name", Roles: []string{"server"}},
-		{Key: "tls_crypt", Label: "TLS-crypt", Hint: "generate with issue", Kind: fieldBool, Roles: []string{"server"}},
-		{Key: "data_ciphers", Label: "Data ciphers", Hint: "empty → modern GCM set", Roles: []string{"server"}},
-		{Key: "auth", Label: "Auth digest", Hint: "empty → SHA256", Roles: []string{"server"}},
-		{Key: "cipher", Label: "Cipher", Hint: "legacy single cipher (optional)", Roles: []string{"server"}},
-		{Key: "pki_ca", Label: "CA path", Hint: "manual override", Kind: fieldFile, AllowedTypes: []string{".crt", ".pem", ".cer"}, Roles: []string{"server"}},
-		{Key: "pki_cert", Label: "Cert path", Hint: "manual override", Kind: fieldFile, AllowedTypes: []string{".crt", ".pem"}, Roles: []string{"server"}},
-		{Key: "pki_key", Label: "Key path", Hint: "manual override", Kind: fieldFile, AllowedTypes: []string{".key", ".pem"}, Roles: []string{"server"}},
+		// ── Server listen / pool ──
+		{
+			Key: "port", Label: "Listen port", Section: "Server listen & pool", Roles: []string{"server"},
+			Hint: "empty → next free from 1194",
+			Tip:  "UDP/TCP port OpenVPN listens on. Leave empty to auto-pick the next free port starting at 1194. Clients must reach Public EP on this port (or your NAT mapping).",
+		},
+		{
+			Key: "local_bind", Label: "Local bind", Roles: []string{"server"},
+			Hint: "optional host IP",
+			Tip:  "Optional local address to bind (multi-homed hosts). Empty = listen on all interfaces. Use a specific IP if only one NIC should accept VPN traffic.",
+		},
+		{
+			Key: "network", Label: "Server net", Roles: []string{"server"},
+			Hint: "empty → free 10.x.0.0/24",
+			Tip:  "Tunnel IPv4 pool in CIDR form (e.g. 10.8.0.0/24). Server takes .1; clients get addresses from the pool. Leave empty for an auto free 10.x.0.0/24 that does not overlap other instances.",
+		},
+		{
+			Key: "topology", Label: "Topology", Kind: fieldSelect, Options: []string{"subnet", "net30", "p2p"}, Roles: []string{"server"},
+			Hint: "subnet is modern default",
+			Tip:  "How tunnel IPs are assigned. subnet = one address per client (recommended). net30 = old point-to-point /30 pairs. p2p = point-to-point without full server mode.",
+		},
+		{
+			Key: "public_endpoint", Label: "Public EP", Roles: []string{"server"},
+			Hint: "vpn.example.com:1194",
+			Tip:  "Hostname or host:port clients use to connect — written into downloadable .ovpn profiles. Use your public DNS or IP (and real port if different from listen via NAT).",
+		},
 
-		// client-only (outbound OpenVPN client instance)
-		{Key: "profile", Label: "Profile", Hint: ".ovpn / .conf — browse and auto-fill remotes + certs", Kind: fieldFile, AllowedTypes: []string{".ovpn", ".conf"}, Roles: []string{"client"}},
-		{Key: "remote", Label: "Remote(s)", Hint: "host:port or host:port:proto, CSV", Roles: []string{"client"}},
-		{Key: "pki_ca", Label: "CA path", Hint: "ca.crt", Kind: fieldFile, AllowedTypes: []string{".crt", ".pem", ".cer"}, Roles: []string{"client"}},
-		{Key: "pki_cert", Label: "Cert path", Hint: "client.crt", Kind: fieldFile, AllowedTypes: []string{".crt", ".pem"}, Roles: []string{"client"}},
-		{Key: "pki_key", Label: "Key path", Hint: "client.key", Kind: fieldFile, AllowedTypes: []string{".key", ".pem"}, Roles: []string{"client"}},
-		{Key: "tls_crypt_path", Label: "TLS-crypt", Hint: "optional tls-crypt key file", Kind: fieldFile, AllowedTypes: []string{".key", ".pem", ".txt"}, Roles: []string{"client"}},
-		{Key: "static_key", Label: "Static key", Hint: "for auth_mode=static_key", Kind: fieldFile, AllowedTypes: []string{".key"}, Roles: []string{"client"}},
-		{Key: "data_ciphers", Label: "Data ciphers", Hint: "optional; from profile if set", Roles: []string{"client"}},
-		{Key: "auth", Label: "Auth digest", Hint: "optional; from profile if set", Roles: []string{"client"}},
-		{Key: "cipher", Label: "Cipher", Hint: "optional; from profile if set", Roles: []string{"client"}},
-		{Key: "features", Label: "Features", Hint: "CSV: explicit_exit_notify,mssfix,…", Roles: []string{"client"}},
+		// ── Server push ──
+		{
+			Key: "push_dns", Label: "Push DNS", Section: "Push to clients", Roles: []string{"server"},
+			Hint: "1.1.1.1,8.8.8.8",
+			Tip:  "DNS resolvers pushed to connected clients (CSV of IPs). They use these while the VPN is up. Empty = do not push DNS.",
+		},
+		{
+			Key: "push_routes", Label: "Push routes", Roles: []string{"server"},
+			Hint: "10.0.0.0/8,192.168.0.0/16",
+			Tip:  "Extra LAN/CIDR routes pushed so clients can reach internal nets through the tunnel. Full-tunnel is Redirect GW instead (or in addition).",
+		},
+		{
+			Key: "push_domain", Label: "Push domain", Roles: []string{"server"},
+			Hint: "internal.lan",
+			Tip:  "Search domain pushed to clients (DHCP option style). Helps resolve short names like “fileserver” inside your network.",
+		},
+		{
+			Key: "redirect_gw", Label: "Redirect GW", Kind: fieldBool, Roles: []string{"server"},
+			Hint: "full-tunnel all traffic",
+			Tip:  "When ON, clients send all internet traffic through the VPN (full tunnel). When OFF, only Server net + Push routes go via VPN (split tunnel).",
+		},
 
-		// common extensions
-		{Key: "features", Label: "Features", Hint: "CSV: udp_stuffing,mssfix,…", Roles: []string{"server"}},
-		{Key: "plugin", Label: "Plugin", Hint: "path to .so — browse or type path + args", Kind: fieldFile},
-		{Key: "extra", Label: "Extra conf", Hint: "raw openvpn directives (fork options)"},
+		// ── Server PKI auto ──
+		{
+			Key: "issue_cert", Label: "Issue cert", Kind: fieldBool, Section: "PKI / certificates (server)", Roles: []string{"server"},
+			Hint: "auto server cert from CA",
+			Tip:  "ON = mint a server certificate (and wire paths) from a managed CA after create. Leave ON for a zero-touch mTLS server. OFF if you already have cert files to paste below.",
+		},
+		{
+			Key: "create_ca", Label: "Create CA", Kind: fieldBool, Roles: []string{"server"},
+			Hint: "mint CA if none exists",
+			Tip:  "If no Certificate Authority exists yet, create a default CA so Issue cert can work. Safe for first-time setups; turn OFF if you already manage CAs.",
+		},
+		{
+			Key: "ca_name", Label: "CA name", Roles: []string{"server"},
+			Hint: "default = first CA",
+			Tip:  "Which managed CA to use when issuing the server cert. Empty = first available CA (or the one Create CA makes).",
+		},
+		{
+			Key: "server_cn", Label: "Server CN", Roles: []string{"server"},
+			Hint: "defaults from Public EP / name",
+			Tip:  "Common Name on the server certificate. Empty = derived from Public EP host or instance name. Should match how clients address the server when possible.",
+		},
+		{
+			Key: "tls_crypt", Label: "TLS-crypt", Kind: fieldBool, Roles: []string{"server"},
+			Hint: "generate with issue",
+			Tip:  "ON = also generate a tls-crypt key (control-channel wrap; hides TLS handshake metadata). Recommended with Issue cert. Clients need the same key in their profile.",
+		},
+		{
+			Key: "data_ciphers", Label: "Data ciphers", Roles: []string{"server"},
+			Hint: "empty → AES-256-GCM:…",
+			Tip:  "Allowed data-channel ciphers (OpenVPN 2.5+ list). Empty = modern GCM/ChaCha set. Only change if peers require a specific suite.",
+		},
+		{
+			Key: "auth", Label: "Auth digest", Roles: []string{"server"},
+			Hint: "empty → SHA256",
+			Tip:  "HMAC digest for the data channel (legacy/control use). Empty defaults to SHA256. Keep matching on clients if you set it.",
+		},
+		{
+			Key: "cipher", Label: "Cipher", Roles: []string{"server"},
+			Hint: "legacy single cipher",
+			Tip:  "Old-style single cipher directive. Prefer Data ciphers on modern OpenVPN. Use only for compatibility with very old clients.",
+		},
+		{
+			Key: "pki_ca", Label: "CA path", Kind: fieldFile, AllowedTypes: []string{".crt", ".pem", ".cer"}, Roles: []string{"server"},
+			Hint: "optional manual ca.crt",
+			Tip:  "Absolute path to CA certificate if you are NOT using Issue cert. Leave empty when auto-issue is ON — openvpnd fills this for you.",
+		},
+		{
+			Key: "pki_cert", Label: "Cert path", Kind: fieldFile, AllowedTypes: []string{".crt", ".pem"}, Roles: []string{"server"},
+			Hint: "optional server.crt",
+			Tip:  "Absolute path to the server certificate file (manual PKI). Leave empty with Issue cert ON.",
+		},
+		{
+			Key: "pki_key", Label: "Key path", Kind: fieldFile, AllowedTypes: []string{".key", ".pem"}, Roles: []string{"server"},
+			Hint: "optional server.key",
+			Tip:  "Absolute path to the server private key (manual PKI). Leave empty with Issue cert ON. Must be readable by the openvpnd host.",
+		},
+
+		// ── Client connect ──
+		{
+			Key: "profile", Label: "Profile", Section: "Connect (client)", Kind: fieldFile, AllowedTypes: []string{".ovpn", ".conf"}, Roles: []string{"client"},
+			Hint: "browse .ovpn / .conf",
+			Tip:  "Import an existing OpenVPN client profile. We parse remotes, proto, and cert material (including inline <ca>/<cert>/<key>). Easiest path: browse a .ovpn, review auto-filled fields, then save.",
+		},
+		{
+			Key: "remote", Label: "Remote(s)", Roles: []string{"client"},
+			Hint: "vpn.example.com:1194 or host:port:udp",
+			Tip:  "Where this client connects — required. CSV of host:port or host:port:proto. Filled automatically from Profile if present. Example: vpn.example.com:1194,backup:1194:udp",
+		},
+		{
+			Key: "pki_ca", Label: "CA path", Kind: fieldFile, AllowedTypes: []string{".crt", ".pem", ".cer"}, Roles: []string{"client"},
+			Hint: "ca.crt",
+			Tip:  "Path to the CA that signed the server (and usually the client) certificate. Required for mTLS unless using static key. Auto-filled from Profile when possible.",
+		},
+		{
+			Key: "pki_cert", Label: "Cert path", Kind: fieldFile, AllowedTypes: []string{".crt", ".pem"}, Roles: []string{"client"},
+			Hint: "client.crt",
+			Tip:  "This machine’s client certificate file. Needed for PKI auth. Import from Profile or browse to the .crt on the openvpnd host.",
+		},
+		{
+			Key: "pki_key", Label: "Key path", Kind: fieldFile, AllowedTypes: []string{".key", ".pem"}, Roles: []string{"client"},
+			Hint: "client.key",
+			Tip:  "Private key matching Cert path. Keep permissions tight (0600). Extracted from inline .ovpn when you import a Profile.",
+		},
+		{
+			Key: "tls_crypt_path", Label: "TLS-crypt", Kind: fieldFile, AllowedTypes: []string{".key", ".pem", ".txt"}, Roles: []string{"client"},
+			Hint: "optional shared tls-crypt key",
+			Tip:  "Optional tls-crypt key file — must match the server if the server uses tls-crypt. Often embedded in provider .ovpn files and extracted on import.",
+		},
+		{
+			Key: "static_key", Label: "Static key", Kind: fieldFile, AllowedTypes: []string{".key"}, Roles: []string{"client"},
+			Hint: "only if auth_mode=static_key",
+			Tip:  "Shared secret for static_key mode (no PKI). Leave empty for normal certificate auth.",
+		},
+		{
+			Key: "data_ciphers", Label: "Data ciphers", Roles: []string{"client"},
+			Hint: "optional; from profile",
+			Tip:  "Client data-ciphers list if the server requires a specific set. Usually left empty or taken from the imported Profile.",
+		},
+		{
+			Key: "auth", Label: "Auth digest", Roles: []string{"client"},
+			Hint: "optional; from profile",
+			Tip:  "HMAC digest if required by the peer. Prefer matching the server; empty is fine for modern defaults.",
+		},
+		{
+			Key: "cipher", Label: "Cipher", Roles: []string{"client"},
+			Hint: "optional legacy",
+			Tip:  "Legacy single cipher for old peers. Prefer Data ciphers / profile defaults on modern OpenVPN.",
+		},
+		{
+			Key: "features", Label: "Features", Section: "Extensions", Roles: []string{"client"},
+			Hint: "explicit_exit_notify,mssfix",
+			Tip:  "Named feature presets (CSV) expanded into conf/plugins/env. For clients, explicit_exit_notify is a good UDP default. See GET /v1/features for the full list.",
+		},
+
+		// ── Extensions ──
+		{
+			Key: "features", Label: "Features", Section: "Extensions", Roles: []string{"server"},
+			Hint: "udp_stuffing,mssfix,…",
+			Tip:  "Named feature presets (CSV): bundles of extra directives, plugins, or env vars. Use for forks (e.g. udp_stuffing template) or small toggles like mssfix. List with GET /v1/features.",
+		},
+		{
+			Key: "plugin", Label: "Plugin", Kind: fieldFile, Section: "Extensions",
+			Hint: "/opt/foo/plugin.so arg=1",
+			Tip:  "OpenVPN --plugin module path (optional args after the path). Use for auth scripts, custom stuffing .so modules, etc. Binary must support the plugin ABI.",
+		},
+		{
+			Key: "extra", Label: "Extra conf",
+			Hint: "raw openvpn lines",
+			Tip:  "Escape hatch: raw OpenVPN config lines appended to the generated conf (one directive per line). For fork-specific options not yet first-class fields. Use carefully — bad lines can prevent start.",
+		},
 	}
 }
 
@@ -526,20 +767,56 @@ func clientCreateFields(servers []string) []fieldDef {
 		opts = []string{"(no servers)"}
 	}
 	return []fieldDef{
-		{Key: "instance", Label: "Instance", Kind: fieldSelect, Options: opts},
-		{Key: "cn", Label: "Common name", Hint: "certificate CN"},
-		{Key: "name", Label: "Display name", Hint: "alice, phone, …"},
-		{Key: "static_ip", Label: "Static IP", Hint: "empty = auto from pool"},
-		{Key: "cert_path", Label: "Cert path", Hint: "client.crt for profiles", Kind: fieldFile, AllowedTypes: []string{".crt", ".pem"}},
-		{Key: "key_path", Label: "Key path", Hint: "client.key for profiles", Kind: fieldFile, AllowedTypes: []string{".key", ".pem"}},
+		{
+			Key: "instance", Label: "Instance", Kind: fieldSelect, Options: opts, Section: "VPN user",
+			Hint: "server instance name",
+			Tip:  "Which server instance this user belongs to. Only server-role instances appear here. The client gets a tunnel IP from that server’s pool.",
+		},
+		{
+			Key: "cn", Label: "Common name",
+			Hint: "alice, phone, laptop1",
+			Tip:  "Certificate Common Name — unique per user on this server. Used for CCD, suspend, profiles, and matching the cert subject. Letters/numbers preferred.",
+		},
+		{
+			Key: "name", Label: "Display name",
+			Hint: "Alice’s phone",
+			Tip:  "Human-friendly label in the UI (not the cert CN). Optional; defaults can follow the CN.",
+		},
+		{
+			Key: "static_ip", Label: "Static IP",
+			Hint: "empty = auto from pool",
+			Tip:  "Fixed tunnel IP inside the server network (e.g. 10.8.0.10). Leave empty to auto-allocate the next free address from the pool.",
+		},
+		{
+			Key: "cert_path", Label: "Cert path", Kind: fieldFile, AllowedTypes: []string{".crt", ".pem"}, Section: "Client cert material",
+			Hint: "optional client.crt",
+			Tip:  "Path to the client certificate used when building .ovpn profiles. Leave empty if you will Issue cert later from the client detail screen.",
+		},
+		{
+			Key: "key_path", Label: "Key path", Kind: fieldFile, AllowedTypes: []string{".key", ".pem"},
+			Hint: "optional client.key",
+			Tip:  "Path to the client private key for profile export. Pair with Cert path. Prefer managed Issue cert when possible.",
+		},
 	}
 }
 
 func binaryCreateFields() []fieldDef {
 	return []fieldDef{
-		{Key: "name", Label: "Name", Hint: "v26, legacy, …"},
-		{Key: "path", Label: "Path", Hint: "/opt/openvpn/sbin/openvpn", Kind: fieldFile},
-		{Key: "notes", Label: "Notes", Hint: "optional"},
+		{
+			Key: "name", Label: "Name", Section: "OpenVPN binary",
+			Hint: "default, stuffing, v2.6",
+			Tip:  "Short registry name you will pin on instances (e.g. default, stuffing). This is the binary_name, not the file path.",
+		},
+		{
+			Key: "path", Label: "Path", Kind: fieldFile,
+			Hint: "/usr/sbin/openvpn",
+			Tip:  "Absolute path to the openvpn executable on this host. openvpnd will probe --version when you register it. Use a custom build path for forks.",
+		},
+		{
+			Key: "notes", Label: "Notes",
+			Hint: "optional description",
+			Tip:  "Free-form note for operators (build flags, “has UDP stuffing”, package version). Not used by OpenVPN itself.",
+		},
 	}
 }
 
