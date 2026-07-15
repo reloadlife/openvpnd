@@ -30,6 +30,68 @@ type DaemonConfig struct {
 	ProfileLinkTTL     string `json:"profile_link_ttl,omitempty"`
 	ProfileLinkMaxUses int    `json:"profile_link_max_uses,omitempty"`
 	ReadOnly           bool   `json:"read_only"`
+	Production         bool   `json:"production"`
+	// Role is the authenticated caller's API role (admin|operator|readonly).
+	Role string `json:"role,omitempty"`
+}
+
+// SystemInfo is non-secret daemon runtime summary (GET /v1/system/info).
+type SystemInfo struct {
+	Version        string `json:"version"`
+	Commit         string `json:"commit,omitempty"`
+	Date           string `json:"date,omitempty"`
+	Production     bool   `json:"production"`
+	BandwidthMode  string `json:"bandwidth_mode"`
+	Backend        string `json:"backend"` // mock | host
+	ListenHTTP     string `json:"listen_http,omitempty"`
+	ListenUnix     string `json:"listen_unix,omitempty"`
+	ListenMetrics  string `json:"listen_metrics,omitempty"`
+	ReadOnly       bool   `json:"read_only"`
+	InstancesTotal *int   `json:"instances_total,omitempty"`
+	InstancesUp    *int   `json:"instances_up,omitempty"`
+
+	// Optional chrome fields (TUI / operators)
+	Status   string `json:"status,omitempty"` // ok | ready | degraded
+	Hostname string `json:"hostname,omitempty"`
+	Uptime   string `json:"uptime,omitempty"`
+
+	// Paths (non-secret layout)
+	DBPath         string `json:"db_path,omitempty"`
+	TimeseriesPath string `json:"timeseries_path,omitempty"`
+	PKIDir         string `json:"pki_dir,omitempty"`
+	ConfDir        string `json:"conf_dir,omitempty"`
+	RuntimeDir     string `json:"runtime_dir,omitempty"`
+	Persistence    string `json:"persistence,omitempty"`
+	PublicBaseURL  string `json:"public_base_url,omitempty"`
+
+	// Ready is existence / ping bits only (no secrets).
+	Ready SystemReady `json:"ready"`
+}
+
+// SystemReady reports non-secret readiness of on-disk layout and DB.
+type SystemReady struct {
+	DB           bool `json:"db"`
+	StateDB      bool `json:"state_db"`
+	TimeseriesDB bool `json:"timeseries_db,omitempty"`
+	PKIDir       bool `json:"pki_dir"`
+	ConfDir      bool `json:"conf_dir"`
+}
+
+// SystemBackupRequest is the body for POST /v1/system/backup.
+// Prefer path (write on host); empty path streams the archive in the response body.
+type SystemBackupRequest struct {
+	Path string `json:"path,omitempty"`
+}
+
+// SystemBackupResponse is returned when backup is written to a host path.
+type SystemBackupResponse struct {
+	Path    string `json:"path"`
+	Bytes   int64  `json:"bytes"`
+	Version string `json:"version,omitempty"`
+	Host    string `json:"host,omitempty"`
+	TS      string `json:"timestamp,omitempty"`
+	Status  string `json:"status,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 // Binary is a named OpenVPN executable.
@@ -197,8 +259,11 @@ type ImportInstanceResponse struct {
 // AdoptInstanceRequest registers an on-disk OpenVPN conf as a managed instance.
 //
 // Unlike import (which takes conf content in the body), adopt reads conf_path
-// from the daemon host filesystem. take_over documents that the existing
-// process should be stopped/restarted under openvpnd (v1 does not force-stop).
+// from the daemon host filesystem. When take_over is true and
+// openvpn.adopt_takeover_enabled is set (default), a live openvpn PID is
+// stopped (SIGTERM, then SIGKILL after 5s) after create, the instance is
+// enabled, and reconcile is forced. openvpnd/openvpnctl PIDs are never killed.
+// Failures to stop are soft-failed into response notes; create still succeeds.
 type AdoptInstanceRequest struct {
 	ConfPath       string `json:"conf_path"`
 	Name           string `json:"name,omitempty"`
@@ -206,7 +271,8 @@ type AdoptInstanceRequest struct {
 	BinaryName     string `json:"binary_name,omitempty"`
 	TakeOver       bool   `json:"take_over,omitempty"`
 	PublicEndpoint string `json:"public_endpoint,omitempty"`
-	// PID is optional operator context (e.g. from discover); stored in notes only.
+	// PID is optional (e.g. from discover). With take_over=true it is the process
+	// to stop after double-checking /proc/<pid>/cmdline is openvpn.
 	PID int `json:"pid,omitempty"`
 }
 
@@ -542,6 +608,18 @@ type Stats struct {
 	TxBytes        int64   `json:"tx_bytes"`
 	RxBps          float64 `json:"rx_bps"`
 	TxBps          float64 `json:"tx_bps"`
+}
+
+// ReadyStatus is returned by GET /readyz (no auth).
+// Status is ok | degraded | fail. Checks holds individual probe results.
+type ReadyStatus struct {
+	Status string            `json:"status"`
+	Checks map[string]string `json:"checks,omitempty"`
+}
+
+// HealthStatus is returned by GET /healthz (no auth).
+type HealthStatus struct {
+	Status string `json:"status"`
 }
 
 // CA is a managed certificate authority.

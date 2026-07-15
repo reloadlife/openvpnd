@@ -1,0 +1,56 @@
+# Production template for openvpnd.
+# Copy to /etc/openvpnd/config.yaml, set auth.token + public_base_url, then:
+#   systemctl enable --now openvpnd
+#
+# See docs/PRODUCTION.md and deploy/openvpnd.service.
+
+production: true
+
+listen:
+  http: "127.0.0.1:51980"   # localhost only; terminate TLS on a reverse proxy if remote
+  # unix: "/run/openvpnd/openvpnd.sock"
+  metrics: "127.0.0.1:9092"
+
+snmp:
+  enabled: false
+  # If enabled: bind localhost, change community, firewalled only
+  listen: "127.0.0.1:1162"
+  community: "change-me-snmp"
+  enterprise_oid: "1.3.6.1.4.1.66666.2"
+
+db:
+  path: "/var/lib/openvpnd/state.db"
+  # timeseries_path: "/var/lib/openvpnd/timeseries.db"
+
+auth:
+  # REQUIRED: replace before first start (or set OPENVPND_AUTH_TOKEN in openvpnd.env)
+  token: "change-me"
+
+# Public HTTPS origin for client profile download / OpenVPN Connect import links.
+# public_base_url: "https://vpn.example.com"
+
+profile_links:
+  default_ttl: 1h          # short-lived install links
+  default_max_uses: 1      # single-use download; 0 = unlimited until expiry
+
+openvpn:
+  conf_dir: "/etc/openvpnd/instances"
+  runtime_dir: "/run/openvpnd"
+  pki_dir: "/var/lib/openvpnd/pki"
+  persistence: "hybrid"    # database | conf | hybrid
+  default_binary: "default"
+  binaries:
+    default: "/usr/sbin/openvpn"
+  sample_interval: 5s
+  reconcile_interval: 5s
+  allow_hooks: false
+  use_mock_backend: false  # never true on a real VPN host
+  adopt_on_start: false
+  # off | tc | shaper | log — prefer off or log until tc is validated on the host
+  bandwidth_enforcement: "off"
+
+log:
+  level: info
+  format: json
+
+read_only: false

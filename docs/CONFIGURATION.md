@@ -2,15 +2,22 @@
 
 ## openvpnd
 
-Example: [`configs/openvpnd.example.yaml`](../configs/openvpnd.example.yaml)
+Examples:
+
+- Dev / general: [`configs/openvpnd.example.yaml`](../configs/openvpnd.example.yaml)
+- Production: [`configs/openvpnd.production.example.yaml`](../configs/openvpnd.production.example.yaml)
 
 Default path after install: `/etc/openvpnd/config.yaml`
+
+Optional systemd env file: [`deploy/openvpnd.env.example`](../deploy/openvpnd.env.example) → `/etc/openvpnd/openvpnd.env`
 
 ### Essential keys
 
 | Key | Description |
 |-----|-------------|
-| `auth.token` | Bearer token for `/v1/*` (**change the default**) |
+| `auth.token` | Legacy single bearer for `/v1/*` as **admin** when `auth.tokens` is empty (**required non-default**; refuses `change-me` unless `OPENVPND_ALLOW_INSECURE=1`) |
+| `auth.tokens` | Optional multi-token list: `{name, token, role}` with `role` = `admin` \| `operator` \| `readonly`. When set, **only** these credentials are accepted |
+| `production` | When `true`, strict checks (non-default token required; warns if `public_base_url` empty) |
 | `listen.http` | API listen address (prefer `127.0.0.1:51980`) |
 | `listen.unix` | Optional Unix socket path |
 | `listen.metrics` | Prometheus listen (empty to disable dedicated listener) |
@@ -26,6 +33,7 @@ Default path after install: `/etc/openvpnd/config.yaml`
 | `openvpn.binaries` | Map of name → absolute openvpn path |
 | `openvpn.use_mock_backend` | Dev/CI without real openvpn |
 | `openvpn.allow_hooks` | Allow PreUp/PostUp shell hooks |
+| `openvpn.adopt_takeover_enabled` | `true` (default) — allow `take_over` to SIGTERM/SIGKILL a verified openvpn PID on adopt |
 | `openvpn.bandwidth_enforcement` | `off` (default) \| `tc` \| `shaper` \| `log` — per-client bandwidth shaping |
 | `public_base_url` | Public origin for profile links (`https://vpn.example.com`) |
 | `profile_links.default_ttl` | Default link lifetime (`24h`) |
@@ -39,8 +47,10 @@ Prefix `OPENVPND_`, nested keys with `_`:
 
 ```bash
 export OPENVPND_AUTH_TOKEN=...
+export OPENVPND_ALLOW_INSECURE=0   # leave 0 on real hosts; 1 only for lab/dev
 export OPENVPND_DB_PATH=/var/lib/openvpnd/state.db
 export OPENVPND_LISTEN_HTTP=127.0.0.1:51980
+export OPENVPND_PUBLIC_BASE_URL=https://vpn.example.com
 ```
 
 ## openvpnctl

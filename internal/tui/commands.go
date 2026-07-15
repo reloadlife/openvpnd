@@ -28,7 +28,9 @@ type dataMsg struct {
 	tlsCrypts []pkgapi.TLSCryptKey
 	// discovered live openvpn processes on the daemon host (soft-fail)
 	discovered []pkgapi.OpenVPNCandidate
-	err        error
+	// system status line from /v1/system/info or /readyz (soft-fail)
+	sysStatus string
+	err       error
 }
 
 type actionDoneMsg struct {
@@ -116,8 +118,60 @@ func fetchData(c *pkgapi.Client, gen uint64) tea.Cmd {
 		if cands, err := c.DiscoverOpenVPN(ctx); err == nil {
 			msg.discovered = cands
 		}
+		// Soft system status: prefer /v1/system/info, else /readyz.
+		if info, err := c.SystemInfo(ctx); err == nil {
+			msg.sysStatus = formatSystemInfoLine(info)
+		} else if ready, err := c.Readyz(ctx); err == nil {
+			msg.sysStatus = "readyz: " + ready.Status
+		}
 		return msg
 	}
+}
+
+// formatSystemInfoLine builds a compact status string for the Stats/Events chrome.
+func formatSystemInfoLine(info pkgapi.SystemInfo) string {
+	parts := make([]string, 0, 8)
+	if info.Version != "" {
+		parts = append(parts, "v"+info.Version)
+	}
+	switch {
+	case info.Status != "":
+		parts = append(parts, info.Status)
+	case info.Ready.DB:
+		parts = append(parts, "ready")
+	}
+	if info.Hostname != "" {
+		parts = append(parts, info.Hostname)
+	}
+	if info.Uptime != "" {
+		parts = append(parts, "up "+info.Uptime)
+	}
+	if info.Backend != "" {
+		parts = append(parts, info.Backend)
+	}
+	if info.BandwidthMode != "" && info.BandwidthMode != "off" {
+		parts = append(parts, "bw="+info.BandwidthMode)
+	}
+	if info.Production {
+		parts = append(parts, "production")
+	}
+	if info.ReadOnly {
+		parts = append(parts, "read-only")
+	}
+	total, up := 0, 0
+	if info.InstancesTotal != nil {
+		total = *info.InstancesTotal
+	}
+	if info.InstancesUp != nil {
+		up = *info.InstancesUp
+	}
+	if total > 0 || up > 0 {
+		parts = append(parts, fmt.Sprintf("inst %d/%d up", up, total))
+	}
+	if len(parts) == 0 {
+		return "system ok"
+	}
+	return strings.Join(parts, " · ")
 }
 
 func doAction(fn func(ctx context.Context) error, flash string) tea.Cmd {

@@ -71,6 +71,8 @@ type rootModel struct {
 	cas       []pkgapi.CA
 	certs     []pkgapi.Certificate
 	tlsCrypts []pkgapi.TLSCryptKey
+	// sysStatus is a soft-fail line from /v1/system/info or /readyz.
+	sysStatus string
 	cursor    int
 
 	// PKI list selection: "ca" | "cert" sections; pkiFilterCA filters certs
@@ -180,6 +182,7 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "error"
 		} else {
 			m.err = ""
+			prevDiscover := len(m.discoverCands)
 			m.instances = msg.instances
 			m.clients = msg.clients
 			m.binaries = msg.binaries
@@ -188,15 +191,22 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cas = msg.cas
 			m.certs = msg.certs
 			m.tlsCrypts = msg.tlsCrypts
+			m.sysStatus = msg.sysStatus
 			m.discoverCands = filterUnmanaged(msg.discovered, msg.instances)
 			m.status = "ok"
-			if n := len(m.discoverCands); n > 0 && m.tab == tabInstances {
+			n := len(m.discoverCands)
+			if n > 0 && m.tab == tabInstances {
 				m.status = fmt.Sprintf("ok · %d host openvpn live", n)
 			}
 			if m.cursor >= m.rowCount() {
 				m.cursor = max(0, m.rowCount()-1)
 			}
 			m.refreshDetailPtrs()
+			// Flash when auto-discover newly finds live unmanaged processes.
+			if n > prevDiscover && n > 0 {
+				m, flashCmd := m.setFlash(fmt.Sprintf("%d live openvpn unmanaged", n))
+				return m, flashCmd
+			}
 		}
 		return m, nil
 
@@ -1181,7 +1191,7 @@ func (m rootModel) openAdoptForm(confPath string, pid int) (tea.Model, tea.Cmd) 
 		vals["pid"] = fmt.Sprintf("%d", pid)
 	}
 	m.form = newForm("Adopt instance from host conf", adoptInstanceFields(), vals)
-	m.form.note = "Daemon reads conf_path on its host. take_over notes intent; v1 does not force-kill the PID."
+	m.form.note = "Daemon reads conf_path on its host. take_over stops a verified openvpn PID (SIGTERM/SIGKILL), enables the instance, and reconciles."
 	m.form.SetSize(m.width, m.formAreaHeight())
 	m.mode = modeAdoptForm
 	return m, nil
@@ -1626,7 +1636,7 @@ func (m rootModel) listHelp() string {
 	base := "1-6 tabs  ·  j/k  ·  enter detail  ·  n new  ·  r refresh  ·  R reconcile  ·  q quit"
 	switch m.tab {
 	case tabInstances:
-		return base + "  ·  u/d up/down  ·  I import  ·  A discover  ·  enter adopt live  ·  D delete"
+		return base + "  ·  u/d up/down  ·  I import  ·  A discover  ·  enter adopt live  ·  D delete  ·  live unmanaged auto-discover"
 	case tabClients:
 		return base + "  ·  s/S suspend/resume  ·  D delete"
 	case tabPKI:
@@ -1906,6 +1916,11 @@ func (m rootModel) viewStats(w int) string {
 	var body strings.Builder
 	body.WriteString(titleStyle.Render("Global stats"))
 	body.WriteString("\n\n")
+	if m.sysStatus != "" {
+		body.WriteString(fmt.Sprintf("%s %s\n\n", labelStyle.Render("System"), valueStyle.Render(m.sysStatus)))
+	} else {
+		body.WriteString(fmt.Sprintf("%s %s\n\n", labelStyle.Render("System"), dimStyle.Render("(unavailable)")))
+	}
 	kv := func(k, v string) {
 		body.WriteString(fmt.Sprintf("%s %s\n", labelStyle.Render(k), valueStyle.Render(v)))
 	}
@@ -1920,6 +1935,10 @@ func (m rootModel) viewStats(w int) string {
 func (m rootModel) viewEvents(w, mainH int) string {
 	cw := colWidths(w-2, []int{19, 6, 12, 14, 20}, 4)
 	var b strings.Builder
+	if m.sysStatus != "" {
+		b.WriteString(dimStyle.Render("system · " + m.sysStatus))
+		b.WriteString("\n")
+	}
 	hdr := fmt.Sprintf("%s %s %s %s %s",
 		padCell("TIME", cw[0]), padCell("LVL", cw[1]), padCell("KIND", cw[2]),
 		padCell("INSTANCE", cw[3]), padCell("MESSAGE", cw[4]))

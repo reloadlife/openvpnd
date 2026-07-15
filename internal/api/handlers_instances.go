@@ -234,24 +234,43 @@ func (s *Server) handleAdoptInstance(w http.ResponseWriter, r *http.Request) {
 		createReq.PublicEndpoint = req.PublicEndpoint
 	}
 
+	// When take-over will force-enable after create, avoid a flapping start while
+	// the foreign process still holds the port: create disabled first.
+	takeoverLive := req.TakeOver && s.cfg != nil && s.cfg.OpenVPN.AdoptTakeoverEnabled
+	if takeoverLive {
+		disabled := false
+		createReq.Enabled = &disabled
+	}
+
 	var notes []string
 	notes = append(notes, "adopted conf from daemon host path "+confPath)
 	if req.PID > 0 {
-		notes = append(notes, fmt.Sprintf("operator-supplied pid=%d (not attached)", req.PID))
-	}
-	if req.TakeOver {
-		notes = append(notes,
-			"take_over=true: stop the existing openvpn process (or disable its unit) so openvpnd can start a managed process; "+
-				"v1 does not force-stop foreign PIDs — after adopt, enable the instance and reconcile, or use instance down/up after stopping the old process")
-	} else {
-		notes = append(notes,
-			"take_over=false: instance is registered in desired state; if a foreign openvpn already holds the port, disable/stop it before enabling under openvpnd")
+		notes = append(notes, fmt.Sprintf("operator-supplied pid=%d", req.PID))
 	}
 
 	out, prepared, err := s.createInstanceFromRequest(r, createReq)
 	if err != nil {
 		writeCreateError(w, err)
 		return
+	}
+
+	if req.TakeOver {
+		if !takeoverLive {
+			// Legacy notes-only behavior when adopt_takeover_enabled=false.
+			notes = append(notes,
+				"take_over=true: openvpn.adopt_takeover_enabled=false — stop the existing openvpn process "+
+					"(or disable its unit) so openvpnd can start a managed process; force-stop of foreign PIDs is disabled")
+		} else {
+			notes = append(notes, s.performAdoptTakeover(r, out.Name, req.PID)...)
+		}
+	} else {
+		notes = append(notes,
+			"take_over=false: instance is registered in desired state; if a foreign openvpn already holds the port, disable/stop it before enabling under openvpnd")
+	}
+
+	// Refresh instance after possible enable + reconcile.
+	if fresh, err := s.store.GetInstance(r.Context(), out.Name); err == nil && fresh != nil {
+		out = *fresh
 	}
 	inst := s.toAPIInstance(out)
 	resp := pkgapi.AdoptInstanceResponse{
@@ -267,6 +286,55 @@ func (s *Server) handleAdoptInstance(w http.ResponseWriter, r *http.Request) {
 		fmt.Sprintf(`{"auto":%q,"conf_path":%q,"take_over":%v,"pid":%d}`,
 			strings.Join(prepared.Auto, ","), confPath, req.TakeOver, req.PID))
 	writeJSON(w, http.StatusCreated, resp)
+}
+
+// performAdoptTakeover stops a verified openvpn PID (soft-fail), enables the
+// instance, force-reconciles, and returns notes. Always safe to call after create.
+func (s *Server) performAdoptTakeover(r *http.Request, name string, pid int) []string {
+	var extra []string
+	extra = append(extra, "take_over=true: attempting process takeover")
+
+	if pid <= 0 {
+		extra = append(extra, "take_over=true: no pid supplied; skipped process stop")
+	} else {
+		// Double-check identity before signal (also done inside StopProcess).
+		info, err := adopt.InspectProcess(pid)
+		if err != nil {
+			extra = append(extra, fmt.Sprintf("take_over=true: refused/failed inspect pid %d: %v", pid, err))
+			s.log.Warn("adopt_takeover inspect failed", "instance", name, "pid", pid, "err", err)
+		} else if !info.SafeToStop {
+			extra = append(extra, fmt.Sprintf("take_over=true: refused pid %d: %s", pid, info.Reason))
+			s.log.Warn("adopt_takeover refused", "instance", name, "pid", pid, "reason", info.Reason)
+		} else {
+			if err := adopt.StopProcess(pid); err != nil {
+				extra = append(extra, fmt.Sprintf("take_over=true: stop pid %d failed: %v", pid, err))
+				s.log.Warn("adopt_takeover stop failed", "instance", name, "pid", pid, "err", err)
+			} else {
+				extra = append(extra, fmt.Sprintf("sent SIGTERM to pid %d", pid))
+				s.log.Info("adopt_takeover stopped process", "instance", name, "pid", pid)
+			}
+		}
+	}
+
+	// Enable instance so reconciler starts a managed openvpn.
+	if err := s.store.SetInstanceEnabled(r.Context(), name, true); err != nil {
+		extra = append(extra, "take_over=true: enable instance failed: "+err.Error())
+		s.log.Warn("adopt_takeover enable failed", "instance", name, "err", err)
+	} else {
+		extra = append(extra, "take_over=true: instance enabled")
+	}
+	if err := s.ForceReconcile(r.Context()); err != nil {
+		extra = append(extra, "take_over=true: force reconcile failed: "+err.Error())
+		s.log.Warn("adopt_takeover reconcile failed", "instance", name, "err", err)
+	} else {
+		extra = append(extra, "take_over=true: force reconcile completed")
+	}
+
+	_ = s.store.AddEvent(r.Context(), "info", "adopt_takeover", name, "",
+		"adopt take-over of foreign openvpn process",
+		fmt.Sprintf(`{"pid":%d,"notes":%q}`, pid, strings.Join(extra, "; ")))
+
+	return extra
 }
 
 // createError carries HTTP status for create/import failures.

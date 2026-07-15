@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -40,6 +42,7 @@ func main() {
 		statsCmd(&configPath),
 		reconcileCmd(&configPath),
 		eventsCmd(&configPath),
+		systemCmd(&configPath),
 	)
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
@@ -607,6 +610,106 @@ func eventsCmd(configPath *string) *cobra.Command {
 			return printJSON(list)
 		},
 	}
+}
+
+func systemCmd(configPath *string) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "system",
+		Short: "Daemon system info and backup",
+		Aliases: []string{"sys"},
+	}
+	cmd.AddCommand(systemInfoCmd(configPath), systemBackupCmd(configPath))
+	return cmd
+}
+
+func systemInfoCmd(configPath *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "info",
+		Short: "Show daemon system info (or version+stats fallback)",
+		Long: `Prefer GET /v1/system/info when the daemon exposes it.
+If that route is missing, fall back to /v1/version + /v1/stats.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, c, err := loadClient(*configPath)
+			if err != nil {
+				return err
+			}
+			ctx := context.Background()
+			info, err := c.SystemInfo(ctx)
+			if err == nil {
+				return printJSON(info)
+			}
+			// Hard-fail only on explicit client errors other than missing/unimplemented route.
+			// Transport failures and 404/501 fall through to version+stats.
+			var ae *pkgapi.APIError
+			if errors.As(err, &ae) && ae.Status != http.StatusNotFound && ae.Status != http.StatusNotImplemented && ae.Status < 500 {
+				return err
+			}
+			ver, vErr := c.Version(ctx)
+			st, sErr := c.Stats(ctx)
+			if vErr != nil && sErr != nil {
+				return fmt.Errorf("system info unavailable: %v (version: %v; stats: %v)", err, vErr, sErr)
+			}
+			out := map[string]any{
+				"source": "fallback:version+stats",
+			}
+			if vErr == nil {
+				out["version"] = ver
+			}
+			if sErr == nil {
+				out["stats"] = st
+			}
+			if ready, rErr := c.Readyz(ctx); rErr == nil {
+				out["readyz"] = ready
+			}
+			if err != nil {
+				out["system_info_error"] = err.Error()
+			}
+			return printJSON(out)
+		},
+	}
+}
+
+func systemBackupCmd(configPath *string) *cobra.Command {
+	var outPath string
+	cmd := &cobra.Command{
+		Use:   "backup",
+		Short: "Backup daemon state via API (or print openvpnd backup instructions)",
+		Long: `Calls POST /v1/system/backup with {"path": OUT} when the daemon supports it.
+
+If the API route is not implemented, prints the host-side backup command:
+
+  openvpnd backup --out FILE
+
+See docs/PRODUCTION.md for restore steps.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if strings.TrimSpace(outPath) == "" {
+				return fmt.Errorf("--out is required")
+			}
+			_, c, err := loadClient(*configPath)
+			if err != nil {
+				return err
+			}
+			resp, err := c.SystemBackup(context.Background(), outPath)
+			if err == nil {
+				return printJSON(resp)
+			}
+			if pkgapi.IsNotImplemented(err) {
+				fmt.Fprintf(os.Stderr, "API backup not available on this daemon (%v).\n", err)
+				fmt.Fprintf(os.Stderr, "Run on the openvpnd host instead:\n\n")
+				fmt.Fprintf(os.Stderr, "  openvpnd backup --out %s\n\n", outPath)
+				fmt.Fprintf(os.Stderr, "Restore (service stopped):\n")
+				fmt.Fprintf(os.Stderr, "  systemctl stop openvpnd\n")
+				fmt.Fprintf(os.Stderr, "  openvpnd restore --in %s\n", outPath)
+				fmt.Fprintf(os.Stderr, "  systemctl start openvpnd\n\n")
+				fmt.Fprintf(os.Stderr, "See docs/PRODUCTION.md for the full production checklist.\n")
+				return fmt.Errorf("backup API unimplemented; use openvpnd backup --out %s", outPath)
+			}
+			return err
+		},
+	}
+	cmd.Flags().StringVar(&outPath, "out", "", "backup archive path on the daemon host")
+	_ = cmd.MarkFlagRequired("out")
+	return cmd
 }
 
 func printJSON(v any) error {

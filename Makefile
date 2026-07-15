@@ -7,7 +7,7 @@ LDFLAGS := -s -w \
 	-X $(MODULE)/internal/version.Commit=$(COMMIT) \
 	-X $(MODULE)/internal/version.Date=$(DATE)
 
-.PHONY: all build test test-unit test-api test-feature test-integration test-race lint cover cover-html run-daemon run-ctl cross clean deps
+.PHONY: all build test test-unit test-api test-feature test-integration test-soak test-race lint cover cover-html run-daemon run-ctl cross clean deps
 
 all: build
 
@@ -44,6 +44,10 @@ test-verify:
 # Host OpenVPN + reconciler integration (skips if openvpn missing / no CAP)
 test-integration:
 	go test -tags=integration -count=1 ./internal/ovpnbackend/ ./internal/reconcile/ -timeout 120s
+
+# API stability soak (mock backend; excluded from default go test via //go:build soak)
+test-soak:
+	go test -tags=soak -count=1 ./internal/api/ -run TestSoakStability -timeout 120s
 
 test-race:
 	go test -race -count=1 ./...

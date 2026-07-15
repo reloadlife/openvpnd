@@ -47,10 +47,11 @@ Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 | [docs/EXTENSIONS.md](docs/EXTENSIONS.md) | Plugins, custom builds, feature sets |
 | [docs/OPENVPN_FEATURES.md](docs/OPENVPN_FEATURES.md) | OpenVPN option matrix (A–E) + test ownership |
 | [docs/TESTING.md](docs/TESTING.md) | Suites, coverage targets, `make test-*` |
+| [docs/PRODUCTION.md](docs/PRODUCTION.md) | Production checklist, systemd, backups, soak |
 | [SECURITY.md](SECURITY.md) | Reporting + hardening |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Dev workflow |
 
-Example configs: [`configs/`](configs/) · systemd: [`deploy/openvpnd.service`](deploy/openvpnd.service)
+Example configs: [`configs/`](configs/) · production template: [`configs/openvpnd.production.example.yaml`](configs/openvpnd.production.example.yaml) · systemd: [`deploy/openvpnd.service`](deploy/openvpnd.service)
 
 ## DHCP?
 
@@ -161,9 +162,11 @@ See [docs/INSTALL.md](docs/INSTALL.md).
 
 ## Configuration
 
-- Daemon: [`configs/openvpnd.example.yaml`](configs/openvpnd.example.yaml)
+- Daemon (dev): [`configs/openvpnd.example.yaml`](configs/openvpnd.example.yaml)
+- Daemon (production): [`configs/openvpnd.production.example.yaml`](configs/openvpnd.production.example.yaml)
 - CLI: [`configs/openvpnctl.example.yaml`](configs/openvpnctl.example.yaml)
-- Details: [docs/CONFIGURATION.md](docs/CONFIGURATION.md)
+- systemd env: [`deploy/openvpnd.env.example`](deploy/openvpnd.env.example)
+- Details: [docs/CONFIGURATION.md](docs/CONFIGURATION.md) · ops: [docs/PRODUCTION.md](docs/PRODUCTION.md)
 
 Env prefixes: `OPENVPND_*`, `OPENVPNCTL_*`.
 
@@ -201,6 +204,8 @@ Bearer token on `/v1/*`. Full list: [docs/API.md](docs/API.md).
 ```bash
 make test
 make build
+# optional stability soak (mock backend):
+make test-soak
 ```
 
 Contributions: [CONTRIBUTING.md](CONTRIBUTING.md)

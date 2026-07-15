@@ -125,6 +125,9 @@ func (s *Store) TimeseriesPath() string { return s.tsPath }
 
 // Ping checks both databases.
 func (s *Store) Ping(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("database closed")
+	}
 	if err := s.db.PingContext(ctx); err != nil {
 		return err
 	}

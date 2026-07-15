@@ -165,7 +165,7 @@ https://github.com/reloadlife/openvpnd/issues?q=is%3Aissue+is%3Aopen+label%3Aroa
 
 | Area | Issue | Notes |
 |------|-------|--------|
-| Live adopt running openvpn | [#1](https://github.com/reloadlife/openvpnd/issues/1) | `/proc` discover + `POST /adopt` (take_over note; no force-stop v1) |
+| Live adopt running openvpn | [#1](https://github.com/reloadlife/openvpnd/issues/1) | `/proc` discover + `POST /adopt` (`take_over` stops verified openvpn PID) |
 | Inline PEM on conf import | [#2](https://github.com/reloadlife/openvpnd/issues/2) | materialize under pki_dir |
 | Full management API | [#3](https://github.com/reloadlife/openvpnd/issues/3) | kill, hold, status, logs — API done (`POST …/mgmt`, `GET …/status`); TUI pending |
 | Bandwidth enforcement | [#4](https://github.com/reloadlife/openvpnd/issues/4) | Done: tc / shaper / log + traffic_limit suspend |

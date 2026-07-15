@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -40,6 +41,21 @@ func New(cfg *config.DaemonConfig, log *slog.Logger) *App {
 
 // Run starts the daemon until signal.
 func (a *App) Run(ctx context.Context) error {
+	if err := a.cfg.Validate(); err != nil {
+		return fmt.Errorf("config validation: %w", err)
+	}
+	if a.cfg.Production {
+		a.log.Info("production mode enabled")
+		if strings.TrimSpace(a.cfg.PublicBaseURL) == "" {
+			a.log.Warn("production: public_base_url is empty; profile download links will use http://{listen.http} — set public_base_url for correct client import URLs")
+		}
+		if a.cfg.OpenVPN.UseMockBackend {
+			a.log.Warn("production: openvpn.use_mock_backend is true (not suitable for real VPN traffic)")
+		}
+	} else if a.cfg.WeakAuthToken() {
+		a.log.Warn("auth.token is weak (empty or change-me); acceptable only with OPENVPND_ALLOW_INSECURE=1")
+	}
+
 	store, err := db.OpenWithOptions(db.OpenOptions{
 		Path:           a.cfg.DB.Path,
 		TimeseriesPath: a.cfg.DB.TimeseriesPath,

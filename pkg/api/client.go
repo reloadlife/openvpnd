@@ -375,6 +375,36 @@ func (c *Client) Stats(ctx context.Context) (Stats, error) {
 	return out, err
 }
 
+// SystemInfo returns production system summary (GET /v1/system/info).
+// Returns APIError with Status 404 when the daemon does not expose the route yet.
+func (c *Client) SystemInfo(ctx context.Context) (SystemInfo, error) {
+	var out SystemInfo
+	err := c.do(ctx, http.MethodGet, "/v1/system/info", nil, &out)
+	return out, err
+}
+
+// SystemBackup requests an on-daemon backup to path (POST /v1/system/backup).
+// Path is a filesystem path on the daemon host. Returns 404 when unimplemented.
+func (c *Client) SystemBackup(ctx context.Context, path string) (SystemBackupResponse, error) {
+	var out SystemBackupResponse
+	err := c.do(ctx, http.MethodPost, "/v1/system/backup", SystemBackupRequest{Path: path}, &out)
+	return out, err
+}
+
+// Readyz checks daemon readiness (GET /readyz, no auth required).
+func (c *Client) Readyz(ctx context.Context) (ReadyStatus, error) {
+	var out ReadyStatus
+	err := c.do(ctx, http.MethodGet, "/readyz", nil, &out)
+	return out, err
+}
+
+// Healthz checks daemon liveness (GET /healthz, no auth required).
+func (c *Client) Healthz(ctx context.Context) (HealthStatus, error) {
+	var out HealthStatus
+	err := c.do(ctx, http.MethodGet, "/healthz", nil, &out)
+	return out, err
+}
+
 // Reconcile forces a reconcile cycle.
 func (c *Client) Reconcile(ctx context.Context) error {
 	return c.do(ctx, http.MethodPost, "/v1/reconcile", nil, nil)

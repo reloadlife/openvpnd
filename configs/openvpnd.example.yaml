@@ -15,7 +15,22 @@ db:
   # timeseries_path: "/var/lib/openvpnd/timeseries.db"
 
 auth:
+  # Legacy single-token mode: treated as role=admin when `tokens` is empty.
+  # MUST change; daemon refuses default unless OPENVPND_ALLOW_INSECURE=1
   token: "change-me"
+  # Multi-token RBAC (when set, only these credentials are accepted):
+  # tokens:
+  #   - name: admin
+  #     token: "replace-with-admin-token"
+  #     role: admin      # full access
+  #   - name: ops
+  #     token: "replace-with-operator-token"
+  #     role: operator   # mutate instances/clients/profiles; no DELETE CA / system backup
+  #   - name: ro
+  #     token: "replace-with-readonly-token"
+  #     role: readonly   # GET/HEAD only
+
+# production: true  # strict checks: non-default token required; warns if public_base_url empty
 
 # Externally reachable base for client profile links (OpenVPN Connect import).
 # Behind reverse proxy: https://vpn.example.com
@@ -41,6 +56,10 @@ openvpn:
   allow_hooks: false
   # use_mock_backend: true  # for dev/CI without openvpn binary
   adopt_on_start: false
+  # When true, POST /v1/instances/adopt with take_over=true may SIGTERM (then
+  # SIGKILL after 5s) a verified openvpn PID from discover. Never signals
+  # openvpnd/openvpnctl. Set false to restore notes-only take_over.
+  adopt_takeover_enabled: true
   # Per-client bandwidth_rx_bps / bandwidth_tx_bps enforcement:
   #   off    — disabled (default); traffic_limit_bytes suspend still works
   #   tc     — Linux tc HTB + ingress police (needs instance device name + iproute2)
@@ -53,3 +72,4 @@ log:
   format: json
 
 read_only: false
+production: false

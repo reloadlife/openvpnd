@@ -66,10 +66,13 @@ func (s *Server) Router() http.Handler {
 	r.Get("/p/{token}", s.handlePublicProfile)
 
 	r.Route("/v1", func(r chi.Router) {
-		r.Use(bearerAuth(s.cfg.Auth.Token))
-		r.Use(readOnlyGuard(s.cfg.ReadOnly))
+		r.Use(tokenAuth(s.cfg.AuthPrincipals()))
+		r.Use(roleGuard(s.cfg.ReadOnly))
+		r.Use(s.auditMutations)
 
 		r.Get("/version", s.handleVersion)
+		r.Get("/system/info", s.handleSystemInfo)
+		r.Post("/system/backup", s.handleSystemBackup)
 		r.Get("/config", s.handleConfig)
 		r.Post("/reconcile", s.handleReconcile)
 		r.Get("/events", s.handleEvents)

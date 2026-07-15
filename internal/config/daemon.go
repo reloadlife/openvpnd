@@ -2,11 +2,33 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/spf13/viper"
 )
+
+// API auth roles for bearer tokens.
+const (
+	RoleAdmin    = "admin"
+	RoleOperator = "operator"
+	RoleReadonly = "readonly"
+)
+
+// AuthToken is a named API credential with a role.
+type AuthToken struct {
+	Name  string `mapstructure:"name" yaml:"name"`
+	Token string `mapstructure:"token" yaml:"token"`
+	Role  string `mapstructure:"role" yaml:"role"` // admin | operator | readonly
+}
+
+// AuthPrincipal is a resolved bearer credential used by the API middleware.
+type AuthPrincipal struct {
+	Name  string
+	Token string
+	Role  string
+}
 
 // DaemonConfig holds openvpnd configuration.
 type DaemonConfig struct {
@@ -26,7 +48,11 @@ type DaemonConfig struct {
 		TimeseriesPath string `mapstructure:"timeseries_path"`
 	} `mapstructure:"db"`
 	Auth struct {
-		Token string `mapstructure:"token"`
+		// Token is the legacy single bearer credential. When Tokens is empty it is
+		// treated as role=admin (backward compatible). When Tokens is non-empty,
+		// only Tokens are accepted.
+		Token  string      `mapstructure:"token"`
+		Tokens []AuthToken `mapstructure:"tokens"`
 	} `mapstructure:"auth"`
 	OpenVPN struct {
 		ConfDir           string            `mapstructure:"conf_dir"`
@@ -40,6 +66,11 @@ type DaemonConfig struct {
 		AllowHooks        bool              `mapstructure:"allow_hooks"`
 		UseMockBackend    bool              `mapstructure:"use_mock_backend"`
 		AdoptOnStart      bool              `mapstructure:"adopt_on_start"`
+		// AdoptTakeoverEnabled controls whether POST /instances/adopt with
+		// take_over=true may SIGTERM/SIGKILL a verified openvpn PID.
+		// When false, take_over only records operator notes (legacy behavior).
+		// Default true via setDaemonDefaults.
+		AdoptTakeoverEnabled bool `mapstructure:"adopt_takeover_enabled"`
 		// BandwidthEnforcement: off | tc | shaper | log
 		// off: no shaping (traffic_limit_bytes suspend still works)
 		// tc: Linux tc HTB + ingress police per client static_ip (needs device name)
@@ -60,6 +91,8 @@ type DaemonConfig struct {
 		Format string `mapstructure:"format"`
 	} `mapstructure:"log"`
 	ReadOnly bool `mapstructure:"read_only"`
+	// Production enables strict startup checks (non-default auth token, etc.).
+	Production bool `mapstructure:"production"`
 }
 
 // LoadDaemon loads daemon config from file/env/defaults.
@@ -91,6 +124,9 @@ func LoadDaemon(path string) (*DaemonConfig, error) {
 	}
 	if cfg.Auth.Token == "" {
 		cfg.Auth.Token = v.GetString("auth.token")
+	}
+	if err := normalizeAuth(&cfg); err != nil {
+		return nil, err
 	}
 	if cfg.OpenVPN.Binaries == nil {
 		cfg.OpenVPN.Binaries = map[string]string{}
@@ -150,6 +186,7 @@ func setDaemonDefaults(v *viper.Viper) {
 	v.SetDefault("openvpn.allow_hooks", false)
 	v.SetDefault("openvpn.use_mock_backend", false)
 	v.SetDefault("openvpn.adopt_on_start", false)
+	v.SetDefault("openvpn.adopt_takeover_enabled", true)
 	v.SetDefault("openvpn.bandwidth_enforcement", "off")
 	v.SetDefault("public_base_url", "")
 	v.SetDefault("profile_links.default_ttl", "24h")
@@ -157,6 +194,135 @@ func setDaemonDefaults(v *viper.Viper) {
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
 	v.SetDefault("read_only", false)
+	v.SetDefault("production", false)
+}
+
+// WeakAuthToken reports whether no strong API credential is configured.
+// Multi-token mode is strong when at least one non-default token is present.
+// Legacy mode treats empty or "change-me" auth.token as weak.
+func (c *DaemonConfig) WeakAuthToken() bool {
+	if c == nil {
+		return true
+	}
+	if len(c.Auth.Tokens) > 0 {
+		for _, t := range c.Auth.Tokens {
+			tok := strings.TrimSpace(t.Token)
+			if tok != "" && tok != "change-me" {
+				return false
+			}
+		}
+		return true
+	}
+	t := strings.TrimSpace(c.Auth.Token)
+	return t == "" || t == "change-me"
+}
+
+// AllowInsecure reports OPENVPND_ALLOW_INSECURE=1 (dev/CI escape hatch).
+func AllowInsecure() bool {
+	return os.Getenv("OPENVPND_ALLOW_INSECURE") == "1"
+}
+
+// Validate checks security-sensitive settings before the daemon starts.
+//
+// Weak auth tokens (empty or "change-me") are rejected unless
+// OPENVPND_ALLOW_INSECURE=1. When production is true, weak tokens are always
+// rejected even if ALLOW_INSECURE is set.
+func (c *DaemonConfig) Validate() error {
+	if c == nil {
+		return fmt.Errorf("config is nil")
+	}
+	if c.WeakAuthToken() {
+		if c.Production {
+			return fmt.Errorf("production mode refuses weak API auth (empty or \"change-me\"); set auth.token or auth.tokens")
+		}
+		if !AllowInsecure() {
+			return fmt.Errorf("API auth is empty or default \"change-me\"; set auth.token / auth.tokens, or set OPENVPND_ALLOW_INSECURE=1 for development")
+		}
+	}
+	return nil
+}
+
+// DefaultBinaryPath returns the filesystem path for the configured default binary name.
+func (c *DaemonConfig) DefaultBinaryPath() string {
+	if c == nil {
+		return ""
+	}
+	name := c.OpenVPN.DefaultBinary
+	if name == "" {
+		name = "default"
+	}
+	if c.OpenVPN.Binaries != nil {
+		if p := c.OpenVPN.Binaries[name]; p != "" {
+			return p
+		}
+	}
+	return ""
+}
+
+// NormalizeRole maps role aliases to canonical Role* constants.
+// Returns empty string if the role is unknown.
+func NormalizeRole(role string) string {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case RoleAdmin, "administrator":
+		return RoleAdmin
+	case RoleOperator, "ops":
+		return RoleOperator
+	case RoleReadonly, "read_only", "read-only", "ro", "viewer":
+		return RoleReadonly
+	default:
+		return ""
+	}
+}
+
+func normalizeAuth(cfg *DaemonConfig) error {
+	for i := range cfg.Auth.Tokens {
+		t := &cfg.Auth.Tokens[i]
+		t.Name = strings.TrimSpace(t.Name)
+		t.Token = strings.TrimSpace(t.Token)
+		role := NormalizeRole(t.Role)
+		if t.Token == "" {
+			return fmt.Errorf("auth.tokens[%d]: token is required", i)
+		}
+		if role == "" {
+			return fmt.Errorf("auth.tokens[%d]: role %q invalid (want admin|operator|readonly)", i, t.Role)
+		}
+		t.Role = role
+		if t.Name == "" {
+			t.Name = role
+		}
+	}
+	return nil
+}
+
+// AuthPrincipals returns accepted bearer credentials for the API.
+// When auth.tokens is empty, auth.token is admin (legacy single-token mode).
+// When auth.tokens is set, only those entries are accepted.
+func (c *DaemonConfig) AuthPrincipals() []AuthPrincipal {
+	if c == nil {
+		return nil
+	}
+	if len(c.Auth.Tokens) > 0 {
+		out := make([]AuthPrincipal, 0, len(c.Auth.Tokens))
+		for _, t := range c.Auth.Tokens {
+			if t.Token == "" {
+				continue
+			}
+			role := NormalizeRole(t.Role)
+			if role == "" {
+				continue
+			}
+			name := t.Name
+			if name == "" {
+				name = role
+			}
+			out = append(out, AuthPrincipal{Name: name, Token: t.Token, Role: role})
+		}
+		return out
+	}
+	if c.Auth.Token == "" {
+		return nil
+	}
+	return []AuthPrincipal{{Name: "admin", Token: c.Auth.Token, Role: RoleAdmin}}
 }
 
 // ProfileLinkTTL returns default profile link lifetime.

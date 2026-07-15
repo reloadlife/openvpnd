@@ -2,19 +2,47 @@
 
 Base URL: configured `listen.http` (example `http://127.0.0.1:51980`).
 
-Authentication: `Authorization: Bearer <auth.token>` on all `/v1/*` routes.
+Authentication: `Authorization: Bearer <token>` on all `/v1/*` routes.
+
+### Roles (multi-token RBAC)
+
+| Role | Capabilities |
+|------|----------------|
+| `admin` | Full access (default for legacy single `auth.token`) |
+| `operator` | Mutate instances/clients/profiles/reconcile; **cannot** `DELETE /v1/pki/cas/{name}` or mutate `/v1/system/*` (e.g. backup) |
+| `readonly` | `GET` / `HEAD` / `OPTIONS` only |
+
+Configure named tokens under `auth.tokens` (see [CONFIGURATION.md](CONFIGURATION.md)). Insufficient role → **403** with `error.code: "forbidden"`. `GET /v1/config` includes the caller's `role`.
 
 ## Core
 
 | Method | Path | Notes |
 |--------|------|--------|
 | GET | `/healthz` | Liveness (no auth) |
-| GET | `/readyz` | DB ping (no auth) |
+| GET | `/readyz` | Readiness JSON: `status` + `checks` (db, default_binary, conf_dir, pki_dir, backend); 200 ok/degraded, 503 fail |
 | GET | `/v1/version` | Version |
-| GET | `/v1/config` | Non-secret runtime config |
+| GET | `/v1/system/info` | Non-secret: version, paths, readiness, production, backend, instance counts |
+| POST | `/v1/system/backup` | Write host-path backup or stream tar.gz (**admin** only when multi-token) |
+| GET | `/v1/config` | Non-secret runtime config (+ caller `role`) |
 | POST | `/v1/reconcile` | Force reconcile |
-| GET | `/v1/events` | Audit log |
+| GET | `/v1/events` | Audit log (mutations also auto-recorded as kind `api`) |
 | GET | `/v1/stats` | Global rollup |
+
+### System backup
+
+`POST /v1/system/backup` — auth required; blocked when `read_only` is true.
+
+Preferred body (write on the daemon host):
+
+```json
+{ "path": "/var/backups/openvpnd/openvpnd-2026-07-15.tar.gz" }
+```
+
+```json
+{ "path": "/var/backups/…", "bytes": 12345, "version": "…", "host": "…", "timestamp": "…" }
+```
+
+Omit `path` (or send empty/`{}`) to download `application/gzip` in the response body. Archive layout and CLI: [PRODUCTION.md](PRODUCTION.md#backup-and-restore).
 
 ## Binaries
 
@@ -155,8 +183,8 @@ Response:
 | Field | Notes |
 |-------|--------|
 | `conf_path` | Required absolute path readable by openvpnd |
-| `take_over` | When true, response `notes` tell the operator to stop the foreign process so openvpnd can manage it (v1 does **not** SIGTERM foreign PIDs) |
-| `pid` | Optional context from discover; recorded in notes only |
+| `take_over` | When true and `openvpn.adopt_takeover_enabled` (default), stop a verified openvpn `pid` (SIGTERM, then SIGKILL after 5s), enable the instance, force reconcile. Failures soft-fail into `notes`; create still succeeds. When the flag is false, notes-only (legacy). Never signals openvpnd/openvpnctl. |
+| `pid` | Optional process from discover; required for live stop during take-over |
 
 Response includes `instance`, `parsed`, `warnings`, `auto_filled`, `notes`, `conf_path`.
 

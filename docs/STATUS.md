@@ -8,6 +8,9 @@ openvpnd is under active development. This document tracks what works today vs p
 |---------|--------|
 | [v0.1.0](https://github.com/reloadlife/openvpnd/releases/tag/v0.1.0) | Foundation: instances, PKI/CRL, profiles, TUI, import, iroutes |
 | [v0.2.0](https://github.com/reloadlife/openvpnd/releases/tag/v0.2.0) | Roadmap wave: adopt, mgmt API, bandwidth, bridge/TLS/auth knobs, self-update, TUI |
+| [v1.0.0](https://github.com/reloadlife/openvpnd/releases/tag/v1.0.0) | Production posture: backup/restore, multi-token RBAC, hardened readyz, audit, adopt take-over, systemd/prod config |
+
+Production guide: [PRODUCTION.md](PRODUCTION.md).
 
 ## Implemented
 
@@ -38,7 +41,7 @@ Remaining long-tail options still use **`extra_directives`**. Full LDAP product,
 
 | Topic | Status |
 |-------|--------|
-| Live PID take-over without restart | Partial (adopt registers; take_over notes only) |
+| Live PID take-over without restart | Done (`take_over` + verified SIGTERM/SIGKILL; `openvpn.adopt_takeover_enabled`) |
 | Full LDAP/IdP product | Partial (script verify + preset; no bundled IdP) |
 | Auto-update without operator | Out of scope (explicit `update` only) |
 | Every manpage flag as typed field | Escape hatch |

@@ -104,6 +104,113 @@ func TestAPIFlow(t *testing.T) {
 	rr = httptest.NewRecorder()
 	router.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	require.Equal(t, http.StatusOK, rr.Code)
+
+	// audit middleware: successful mutation should leave an api event
+	ev, err := store.ListEvents(ctx, 50)
+	require.NoError(t, err)
+	var foundAPI bool
+	for _, e := range ev {
+		if e.Kind == "api" {
+			foundAPI = true
+			require.Contains(t, e.Message, "POST")
+			require.NotContains(t, e.Meta, "test-token")
+			require.NotContains(t, e.Meta, "Authorization")
+			break
+		}
+	}
+	require.True(t, foundAPI, "expected audit api event after mutations")
+}
+
+func TestReadyzChecks(t *testing.T) {
+	store, err := db.Open(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+
+	dir := t.TempDir()
+	// Fake openvpn binary path that exists
+	bin := filepath.Join(dir, "openvpn")
+	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755))
+	confDir := filepath.Join(dir, "conf")
+	pkiDir := filepath.Join(dir, "pki")
+
+	cfg := &config.DaemonConfig{}
+	cfg.Auth.Token = "test-token"
+	cfg.OpenVPN.DefaultBinary = "default"
+	cfg.OpenVPN.Binaries = map[string]string{"default": bin}
+	cfg.OpenVPN.ConfDir = confDir
+	cfg.OpenVPN.PKIDir = pkiDir
+	cfg.OpenVPN.UseMockBackend = true
+	cfg.OpenVPN.BandwidthEnforcement = "off"
+	cfg.Listen.HTTP = "127.0.0.1:51980"
+	cfg.Production = false
+
+	backend := ovpnbackend.NewMock()
+	cache := stats.NewCache()
+	srv := api.NewServer(store, backend, cache, nil, cfg, slog.Default())
+	router := srv.Router()
+
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	var ready api.ReadyzResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &ready))
+	require.Equal(t, "ok", ready.Status)
+	require.Equal(t, "ok", ready.Checks["db"])
+	require.Equal(t, "ok", ready.Checks["default_binary"])
+	require.Equal(t, "ok", ready.Checks["conf_dir"])
+	require.Equal(t, "ok", ready.Checks["pki_dir"])
+	require.Equal(t, "mock", ready.Checks["backend"])
+
+	// Missing binary → degraded, still 200
+	cfg.OpenVPN.Binaries["default"] = filepath.Join(dir, "no-such-binary")
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &ready))
+	require.Equal(t, "degraded", ready.Status)
+	require.Equal(t, "missing", ready.Checks["default_binary"])
+	require.Equal(t, "ok", ready.Checks["db"])
+
+	// system/info
+	req := httptest.NewRequest(http.MethodGet, "/v1/system/info", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	var info pkgapi.SystemInfo
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &info))
+	require.Equal(t, "mock", info.Backend)
+	require.Equal(t, "off", info.BandwidthMode)
+	require.False(t, info.Production)
+	require.Equal(t, "127.0.0.1:51980", info.ListenHTTP)
+	require.NotNil(t, info.InstancesTotal)
+}
+
+func TestReadyzDBFail(t *testing.T) {
+	// Closed store → ping fails → status fail / 503
+	store, err := db.Open(":memory:")
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
+
+	dir := t.TempDir()
+	cfg := &config.DaemonConfig{}
+	cfg.Auth.Token = "t"
+	cfg.OpenVPN.DefaultBinary = "default"
+	cfg.OpenVPN.Binaries = map[string]string{"default": "/usr/sbin/openvpn"}
+	cfg.OpenVPN.ConfDir = dir
+	cfg.OpenVPN.PKIDir = filepath.Join(dir, "pki")
+	cfg.OpenVPN.UseMockBackend = true
+
+	srv := api.NewServer(store, ovpnbackend.NewMock(), stats.NewCache(), nil, cfg, slog.Default())
+	rr := httptest.NewRecorder()
+	srv.Router().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	require.Equal(t, http.StatusServiceUnavailable, rr.Code)
+
+	var ready api.ReadyzResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &ready))
+	require.Equal(t, "fail", ready.Status)
+	require.Equal(t, "fail", ready.Checks["db"])
 }
 
 func TestProfileLink(t *testing.T) {
@@ -608,6 +715,8 @@ push "dhcp-option DNS 9.9.9.9"
 	cfg.OpenVPN.DefaultBinary = "default"
 	cfg.OpenVPN.ConfDir = filepath.Join(dir, "conf")
 	cfg.OpenVPN.RuntimeDir = filepath.Join(dir, "run")
+	// Exercise live take-over path: dead PID soft-fails; create still succeeds.
+	cfg.OpenVPN.AdoptTakeoverEnabled = true
 
 	backend := ovpnbackend.NewMock()
 	cache := stats.NewCache()
@@ -648,7 +757,7 @@ push "dhcp-option DNS 9.9.9.9"
 	router.ServeHTTP(rr, req)
 	require.Equal(t, http.StatusBadRequest, rr.Code, rr.Body.String())
 
-	// adopt temp conf with take_over note
+	// adopt temp conf with take_over (dead PID soft-fails; create still succeeds)
 	enabled := true
 	adoptBody, _ := json.Marshal(pkgapi.AdoptInstanceRequest{
 		ConfPath:   confPath,
@@ -674,7 +783,10 @@ push "dhcp-option DNS 9.9.9.9"
 	require.Equal(t, confPath, adopted.ConfPath)
 	require.Equal(t, 99999, adopted.PID)
 	require.NotEmpty(t, adopted.Notes)
-	require.True(t, strings.Contains(strings.Join(adopted.Notes, " "), "take_over=true"))
+	joined := strings.Join(adopted.Notes, " ")
+	require.True(t, strings.Contains(joined, "take_over=true"), "notes=%v", adopted.Notes)
+	require.True(t, strings.Contains(joined, "99999") || strings.Contains(joined, "inspect"), "notes=%v", adopted.Notes)
+	require.True(t, adopted.Instance.Enabled, "take_over should enable the instance")
 	require.Equal(t, "/etc/openvpn/server.crt", adopted.Instance.PKICertPath)
 
 	// route static path must not be treated as instance name
@@ -844,3 +956,226 @@ func TestInstanceMgmtAndStatus(t *testing.T) {
 }
 
 func boolPtr(v bool) *bool { return &v }
+
+func TestMultiTokenRBAC(t *testing.T) {
+	store, err := db.Open(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+
+	ctx := context.Background()
+	require.NoError(t, store.EnsureBinaryDefaults(ctx, map[string]string{
+		"default": "/usr/sbin/openvpn",
+	}))
+
+	dir := t.TempDir()
+	cfg := &config.DaemonConfig{}
+	// Multi-token mode: only tokens list is accepted (legacy auth.token ignored).
+	cfg.Auth.Token = "legacy-ignored"
+	cfg.Auth.Tokens = []config.AuthToken{
+		{Name: "admin", Token: "admin-tok", Role: "admin"},
+		{Name: "ops", Token: "ops-tok", Role: "operator"},
+		{Name: "ro", Token: "ro-tok", Role: "readonly"},
+	}
+	cfg.OpenVPN.DefaultBinary = "default"
+	cfg.OpenVPN.ConfDir = filepath.Join(dir, "conf")
+	cfg.OpenVPN.RuntimeDir = filepath.Join(dir, "run")
+	cfg.OpenVPN.PKIDir = filepath.Join(dir, "pki")
+	cfg.OpenVPN.Persistence = "hybrid"
+
+	backend := ovpnbackend.NewMock()
+	cache := stats.NewCache()
+	rec := reconcile.New(store, backend, cache, reconcile.Config{
+		ConfDir: cfg.OpenVPN.ConfDir, RuntimeDir: cfg.OpenVPN.RuntimeDir, DefaultBinary: "default",
+	}, slog.Default())
+	srv := api.NewServer(store, backend, cache, rec, cfg, slog.Default())
+	router := srv.Router()
+
+	withTok := func(req *http.Request, tok string) *http.Request {
+		req.Header.Set("Authorization", "Bearer "+tok)
+		req.Header.Set("Content-Type", "application/json")
+		return req
+	}
+	do := func(method, path, tok string, body []byte) *httptest.ResponseRecorder {
+		var r *http.Request
+		if body != nil {
+			r = httptest.NewRequest(method, path, bytes.NewReader(body))
+		} else {
+			r = httptest.NewRequest(method, path, nil)
+		}
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, withTok(r, tok))
+		return rr
+	}
+	errCode := func(rr *httptest.ResponseRecorder) string {
+		var env map[string]map[string]any
+		_ = json.Unmarshal(rr.Body.Bytes(), &env)
+		if e, ok := env["error"]; ok {
+			if c, ok := e["code"].(string); ok {
+				return c
+			}
+		}
+		return ""
+	}
+
+	// Legacy single token no longer works when tokens list is set.
+	rr := do(http.MethodGet, "/v1/instances", "legacy-ignored", nil)
+	require.Equal(t, http.StatusUnauthorized, rr.Code)
+
+	// --- readonly: GET ok, POST forbidden ---
+	rr = do(http.MethodGet, "/v1/instances", "ro-tok", nil)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	rr = do(http.MethodGet, "/v1/config", "ro-tok", nil)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	var cfgResp pkgapi.DaemonConfig
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &cfgResp))
+	require.Equal(t, "readonly", cfgResp.Role)
+
+	noIssue := false
+	instBody, _ := json.Marshal(pkgapi.InstanceCreateRequest{
+		Name: "ovpn0", Role: "server", ServerNetwork: "10.8.0.0/24",
+		Port: 1194, IssueServerCert: &noIssue,
+	})
+	rr = do(http.MethodPost, "/v1/instances", "ro-tok", instBody)
+	require.Equal(t, http.StatusForbidden, rr.Code, rr.Body.String())
+	require.Equal(t, "forbidden", errCode(rr))
+
+	// --- operator: can create instance + reconcile; cannot delete CA / system backup ---
+	rr = do(http.MethodPost, "/v1/instances", "ops-tok", instBody)
+	require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
+
+	rr = do(http.MethodPost, "/v1/reconcile", "ops-tok", nil)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	rr = do(http.MethodGet, "/v1/config", "ops-tok", nil)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &cfgResp))
+	require.Equal(t, "operator", cfgResp.Role)
+
+	// operator can create CA but not delete it
+	caBody, _ := json.Marshal(pkgapi.CreateCARequest{Name: "main", CommonName: "Test CA"})
+	rr = do(http.MethodPost, "/v1/pki/cas", "ops-tok", caBody)
+	require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
+
+	rr = do(http.MethodDelete, "/v1/pki/cas/main", "ops-tok", nil)
+	require.Equal(t, http.StatusForbidden, rr.Code, rr.Body.String())
+	require.Equal(t, "forbidden", errCode(rr))
+
+	// operator blocked from system backup
+	backupBody, _ := json.Marshal(map[string]string{"path": filepath.Join(dir, "b.tar.gz")})
+	rr = do(http.MethodPost, "/v1/system/backup", "ops-tok", backupBody)
+	require.Equal(t, http.StatusForbidden, rr.Code, rr.Body.String())
+	require.Equal(t, "forbidden", errCode(rr))
+
+	// operator may still GET system info
+	rr = do(http.MethodGet, "/v1/system/info", "ops-tok", nil)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	// --- admin: full access including CA delete ---
+	rr = do(http.MethodGet, "/v1/config", "admin-tok", nil)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &cfgResp))
+	require.Equal(t, "admin", cfgResp.Role)
+
+	rr = do(http.MethodDelete, "/v1/pki/cas/main", "admin-tok", nil)
+	require.Equal(t, http.StatusNoContent, rr.Code, rr.Body.String())
+
+	// admin can create another CA (filesystem still holds "main"; use a new name)
+	caBody2, _ := json.Marshal(pkgapi.CreateCARequest{Name: "admin-ca", CommonName: "Admin CA"})
+	rr = do(http.MethodPost, "/v1/pki/cas", "admin-tok", caBody2)
+	require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
+}
+
+func TestLegacySingleTokenIsAdmin(t *testing.T) {
+	store, err := db.Open(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	require.NoError(t, store.EnsureBinaryDefaults(ctx, map[string]string{"default": "/usr/sbin/openvpn"}))
+
+	cfg := &config.DaemonConfig{}
+	cfg.Auth.Token = "solo-admin"
+	// Tokens empty → legacy token is admin
+	cfg.OpenVPN.DefaultBinary = "default"
+	cfg.OpenVPN.ConfDir = t.TempDir()
+	cfg.OpenVPN.RuntimeDir = t.TempDir()
+
+	srv := api.NewServer(store, ovpnbackend.NewMock(), stats.NewCache(), nil, cfg, slog.Default())
+	router := srv.Router()
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/config", nil)
+	req.Header.Set("Authorization", "Bearer solo-admin")
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	var cfgResp pkgapi.DaemonConfig
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &cfgResp))
+	require.Equal(t, "admin", cfgResp.Role)
+}
+
+func TestSystemBackupAPI(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "state.db")
+	store, err := db.Open(dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+
+	pkiDir := filepath.Join(dir, "pki")
+	confDir := filepath.Join(dir, "conf")
+	require.NoError(t, os.MkdirAll(pkiDir, 0o755))
+	require.NoError(t, os.MkdirAll(confDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pkiDir, "marker"), []byte("pki"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(confDir, "x.conf"), []byte("port 1\n"), 0o644))
+
+	cfg := &config.DaemonConfig{}
+	cfg.Auth.Token = "admin-token"
+	cfg.DB.Path = dbPath
+	cfg.OpenVPN.PKIDir = pkiDir
+	cfg.OpenVPN.ConfDir = confDir
+	cfg.OpenVPN.DefaultBinary = "default"
+	cfg.OpenVPN.Binaries = map[string]string{"default": "/usr/sbin/openvpn"}
+
+	srv := api.NewServer(store, ovpnbackend.NewMock(), stats.NewCache(), nil, cfg, slog.Default())
+	router := srv.Router()
+
+	// path write
+	out := filepath.Join(dir, "backup.tar.gz")
+	body, _ := json.Marshal(map[string]string{"path": out})
+	req := httptest.NewRequest(http.MethodPost, "/v1/system/backup", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer admin-token")
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	var resp pkgapi.SystemBackupResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+	require.Equal(t, out, resp.Path)
+	require.Greater(t, resp.Bytes, int64(0))
+	require.Equal(t, "ok", resp.Status)
+	st, err := os.Stat(out)
+	require.NoError(t, err)
+	require.Greater(t, st.Size(), int64(0))
+
+	// relative path rejected
+	body, _ = json.Marshal(map[string]string{"path": "relative.tar.gz"})
+	req = httptest.NewRequest(http.MethodPost, "/v1/system/backup", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer admin-token")
+	req.Header.Set("Content-Type", "application/json")
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+
+	// system info includes paths + ready
+	req = httptest.NewRequest(http.MethodGet, "/v1/system/info", nil)
+	req.Header.Set("Authorization", "Bearer admin-token")
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	var info pkgapi.SystemInfo
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &info))
+	require.Equal(t, dbPath, info.DBPath)
+	require.Equal(t, pkiDir, info.PKIDir)
+	require.True(t, info.Ready.DB)
+	require.True(t, info.Ready.PKIDir)
+	require.True(t, info.Ready.ConfDir)
+}

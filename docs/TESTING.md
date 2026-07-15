@@ -12,7 +12,7 @@ We do **not** require 100% line coverage on TUI/CLI chrome; we require behaviora
 ## Quick commands
 
 ```bash
-make test              # race + count=1, all packages (excludes //go:build integration)
+make test              # race + count=1, all packages (excludes //go:build integration|soak)
 make test-unit         # fast packages (no race): netutil instance confgen features db
 make test-api          # API + PKI + profile integration-style tests
 make test-race         # full with -race
@@ -21,6 +21,7 @@ make cover-html        # coverage.html for browser
 make test-feature      # confgen + features matrices
 make test-verify       # master manageability e2e + supporting suites
 make test-integration  # host OpenVPN backend (skips if openvpn/CAP missing)
+make test-soak         # API stability soak (mock backend; //go:build soak)
 ```
 
 ### Master feature e2e
@@ -45,6 +46,7 @@ make test-integration  # host OpenVPN backend (skips if openvpn/CAP missing)
 | **tui-logic** | tui (parse/import) | .ovpn import parsing only |
 | **feature** | confgen + features | OpenVPN directive emission |
 | **integration** | ovpnbackend (+ reconcile) with `-tags=integration` | Live host backend / openvpn binary |
+| **soak** | api with `-tags=soak` | Stability: N instances × 50 up/down/list/reconcile (mock) |
 
 ### Recommended CI order
 
@@ -55,6 +57,8 @@ make test-api
 make test-race
 # optional on privileged lab hosts with openvpn installed:
 make test-integration
+# optional longer stability pass (still mock-only, no openvpn required):
+make test-soak
 ```
 
 ## CI (GitHub Actions)
@@ -155,6 +159,32 @@ go test -tags=integration -count=1 ./internal/ovpnbackend/ ./internal/reconcile/
 Optional later: privileged / self-hosted CI job. Unit suites stay mock-only.
 
 Pure helpers used by the host path (`FindOpenVPN`, version/PID parsing, …) have ordinary unit tests (no build tag).
+
+## API stability soak (`make test-soak`)
+
+Longer control-plane stress lives in `internal/api/soak_test.go` with:
+
+```go
+//go:build soak
+```
+
+Default `go test ./...` and `make test` **do not** build or run it.
+
+What it does (mock OpenVPN backend, in-memory SQLite, `t.TempDir` conf/runtime):
+
+1. Create **N=8** server instances (no PKI issue; distinct ports/networks).
+2. For **50 iterations**: flip each instance **up** or **down**, **list** instances, **POST /v1/reconcile**, assert `/healthz`.
+3. Final down + list — instance count must not drift.
+
+Run:
+
+```bash
+make test-soak
+# equivalent:
+go test -tags=soak -count=1 ./internal/api/ -run TestSoakStability -timeout 120s
+```
+
+Use before production cutover or after reconciler/API changes that touch ensure/stop paths. See also [PRODUCTION.md](PRODUCTION.md).
 
 ## Planned tests (not yet full)
 

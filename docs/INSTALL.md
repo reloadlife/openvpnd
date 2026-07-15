@@ -101,10 +101,23 @@ Terminate TLS on the reverse proxy; only expose what you need (`/p/` for users, 
 
 | Path | Purpose |
 |------|---------|
-| `/etc/openvpnd/config.yaml` | Daemon config |
+| `/etc/openvpnd/config.yaml` | Daemon config (start from [`configs/openvpnd.production.example.yaml`](../configs/openvpnd.production.example.yaml) on real hosts) |
+| `/etc/openvpnd/openvpnd.env` | Optional systemd `EnvironmentFile` (see [`deploy/openvpnd.env.example`](../deploy/openvpnd.env.example)) |
 | `/etc/openvpnd/instances/` | Generated confs + CCD |
 | `/var/lib/openvpnd/` | SQLite + PKI |
 | `/run/openvpnd/` | PID, management sockets, status, logs |
+| `/var/backups/openvpnd/` | Backup archives (`openvpnd backup`); allowed by systemd `ReadWritePaths` |
+
+### Backups
+
+```bash
+sudo install -d -m 0750 /var/backups/openvpnd
+sudo openvpnd backup --config /etc/openvpnd/config.yaml \
+  --out /var/backups/openvpnd/openvpnd-$(date +%F).tar.gz
+# restore (daemon stopped): openvpnd restore --in … --config /etc/openvpnd/config.yaml
+```
+
+Full procedure: [PRODUCTION.md](PRODUCTION.md#backup-and-restore). Ops checklist: [PRODUCTION.md](PRODUCTION.md).
 
 ## Uninstall
 
