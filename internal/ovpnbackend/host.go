@@ -7,8 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -65,11 +63,7 @@ func (b *HostBackend) ProbeBinary(ctx context.Context, path string) (string, err
 			return "", fmt.Errorf("probe %s: %w", path, err)
 		}
 	}
-	line := strings.TrimSpace(string(out))
-	if i := strings.IndexByte(line, '\n'); i >= 0 {
-		line = line[:i]
-	}
-	return line, nil
+	return firstVersionLine(string(out)), nil
 }
 
 func (b *HostBackend) ListLive(ctx context.Context) ([]LiveInstance, error) {
@@ -356,10 +350,5 @@ func readPIDFile(path string) int {
 	if err != nil {
 		return 0
 	}
-	s := strings.TrimSpace(string(b))
-	pid, err := strconv.Atoi(s)
-	if err != nil {
-		return 0
-	}
-	return pid
+	return parsePIDFileContent(b)
 }

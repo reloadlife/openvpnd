@@ -163,6 +163,20 @@ func (c *Client) ImportInstance(ctx context.Context, req ImportInstanceRequest) 
 	return out, err
 }
 
+// DiscoverOpenVPN lists running openvpn processes on the daemon host.
+func (c *Client) DiscoverOpenVPN(ctx context.Context) ([]OpenVPNCandidate, error) {
+	var out []OpenVPNCandidate
+	err := c.do(ctx, http.MethodGet, "/v1/instances/discover", nil, &out)
+	return out, err
+}
+
+// AdoptInstance reads a conf path on the daemon host and creates an instance.
+func (c *Client) AdoptInstance(ctx context.Context, req AdoptInstanceRequest) (AdoptInstanceResponse, error) {
+	var out AdoptInstanceResponse
+	err := c.do(ctx, http.MethodPost, "/v1/instances/adopt", req, &out)
+	return out, err
+}
+
 // GetInstance returns one instance.
 func (c *Client) GetInstance(ctx context.Context, name string) (Instance, error) {
 	var out Instance
@@ -195,6 +209,20 @@ func (c *Client) InstanceDown(ctx context.Context, name string) error {
 // InstanceRestart restarts an instance process.
 func (c *Client) InstanceRestart(ctx context.Context, name string) error {
 	return c.do(ctx, http.MethodPost, "/v1/instances/"+name+"/restart", nil, nil)
+}
+
+// MgmtCommand runs a whitelisted OpenVPN management command on a live instance.
+func (c *Client) MgmtCommand(ctx context.Context, name string, req MgmtCommandRequest) (MgmtCommandResponse, error) {
+	var out MgmtCommandResponse
+	err := c.do(ctx, http.MethodPost, "/v1/instances/"+name+"/mgmt", req, &out)
+	return out, err
+}
+
+// InstanceStatus returns structured live status from the management interface (if up).
+func (c *Client) InstanceStatus(ctx context.Context, name string) (InstanceStatus, error) {
+	var out InstanceStatus
+	err := c.do(ctx, http.MethodGet, "/v1/instances/"+name+"/status", nil, &out)
+	return out, err
 }
 
 // ExportInstance returns rendered conf text.

@@ -87,11 +87,12 @@ func (a *App) Run(ctx context.Context) error {
 	collector := metrics.New(cache, nil)
 
 	rec := reconcile.New(store, backend, cache, reconcile.Config{
-		ConfDir:        a.cfg.OpenVPN.ConfDir,
-		RuntimeDir:     a.cfg.OpenVPN.RuntimeDir,
-		DefaultBinary:  a.cfg.OpenVPN.DefaultBinary,
-		SampleInterval: a.cfg.SampleInterval(),
-		AllowHooks:     a.cfg.OpenVPN.AllowHooks,
+		ConfDir:              a.cfg.OpenVPN.ConfDir,
+		RuntimeDir:           a.cfg.OpenVPN.RuntimeDir,
+		DefaultBinary:        a.cfg.OpenVPN.DefaultBinary,
+		SampleInterval:       a.cfg.SampleInterval(),
+		AllowHooks:           a.cfg.OpenVPN.AllowHooks,
+		BandwidthEnforcement: a.cfg.OpenVPN.BandwidthEnforcement,
 	}, a.log)
 	rec.SetMetrics(collector)
 

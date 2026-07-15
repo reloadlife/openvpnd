@@ -37,14 +37,54 @@ var Builtin = []db.FeaturePreset{
 	},
 	{
 		ID:          "udp_stuffing",
-		Description: "Template for UDP stuffing / obfuscation with a custom OpenVPN build",
-		ExtraDirectives: "# UDP stuffing / custom fork options — set binary_name to your patched openvpn\n" +
-			"# and plugins[] to your .so, then add fork-specific directives below.\n" +
-			"# Example (replace with your fork's real options):\n" +
+		Description: "UDP stuffing / obfuscation recipe (custom OpenVPN binary required)",
+		// Directives stay commented so stock openvpn still starts; uncomment after
+		// registering a forked binary and confirming the fork's option names.
+		ExtraDirectives: "# UDP stuffing — REQUIRES binary_name pinned to a custom/forked openvpn\n" +
+			"# (register via POST /v1/binaries, then set instance.binary_name). Stock\n" +
+			"# openvpn will reject un-commented fork options.\n" +
+			"#\n" +
+			"# Common fork-style options (names vary by patch — adjust to match yours):\n" +
 			"# stuffing-enable\n" +
-			"# stuffing-size 100\n",
+			"# stuffing-size 128\n" +
+			"# stuffing-interval 0\n" +
+			"# obfuscate-enable\n" +
+			"#\n" +
+			"# Optional plugin path (prefer instance.plugins[] or a custom preset):\n" +
+			"# plugin /opt/openvpn-stuffing/lib/stuffing.so mode=1\n",
 		Builtin: true,
-		Notes:   "Requires a custom OpenVPN binary (multi-binary registry) and usually a plugin path",
+		Notes:   "binary_name must be a custom OpenVPN fork; uncomment ExtraDirectives to match your fork's ABI. Pair with udp_stuffing_env for process env.",
+	},
+	{
+		ID:          "udp_stuffing_env",
+		Description: "Env-driven UDP stuffing toggle for forks that read STUFFING_*",
+		EnvVars: []db.EnvVar{
+			{Name: "STUFFING_ENABLE", Value: "1"},
+		},
+		ExtraDirectives: "# process env: STUFFING_ENABLE=1 (applied to supervised openvpn, not conf)\n" +
+			"# binary_name must be a custom OpenVPN that honors STUFFING_* env vars.\n",
+		Builtin: true,
+		Notes:   "Sets STUFFING_ENABLE=1 on the supervised openvpn process. Requires custom binary_name; combine with udp_stuffing for conf comments.",
+	},
+	{
+		ID:          "auth_script_template",
+		Description: "Server-side username/password verify via external script",
+		// Path is an example — operators must install their own verifier.
+		ExtraDirectives: "script-security 2\n" +
+			"# auth-user-pass-verify path is an EXAMPLE — install your script and adjust:\n" +
+			"auth-user-pass-verify /usr/local/libexec/openvpnd-auth.sh via-env\n",
+		Builtin: true,
+		Notes:   "Example path /usr/local/libexec/openvpnd-auth.sh — replace with a real verifier. script-security 2 required for via-env.",
+	},
+	{
+		ID:          "tls_modern",
+		Description: "Modern TLS floor: TLS 1.2+ and preferred groups",
+		// tls-version-min may also be set via instance.tls_version_min; avoid enabling both
+		// unless values match. tls-groups is preset-only until typed fields land.
+		ExtraDirectives: "tls-version-min 1.2\n" +
+			"tls-groups X25519:P-256\n",
+		Builtin: true,
+		Notes:   "Prefer this preset OR instance.tls_version_min, not conflicting duplicates. tls-groups needs a recent OpenVPN/OpenSSL.",
 	},
 	{
 		ID:          "comp_lzo_no",

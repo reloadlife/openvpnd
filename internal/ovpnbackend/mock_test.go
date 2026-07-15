@@ -40,6 +40,21 @@ func TestMockEnsureStopList(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, st.Clients, 1)
 	require.Equal(t, int64(100), st.RxBytes)
+
+	raw, err := mgmt.Raw(ctx, "status 2")
+	require.NoError(t, err)
+	require.Contains(t, raw, "alice")
+	raw, err = mgmt.Raw(ctx, "kill alice")
+	require.NoError(t, err)
+	require.Contains(t, raw, "SUCCESS")
+	raw, err = mgmt.Raw(ctx, "signal SIGUSR1")
+	require.NoError(t, err)
+	require.Contains(t, raw, "SUCCESS")
+	raw, err = mgmt.Raw(ctx, "version")
+	require.NoError(t, err)
+	require.Contains(t, raw, "OpenVPN")
+	_, err = mgmt.Raw(ctx, "notacommand")
+	require.Error(t, err)
 	_ = mgmt.Close()
 
 	// conf change → still up

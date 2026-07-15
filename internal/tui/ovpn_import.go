@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/reloadlife/openvpnd/internal/confimport"
 )
 
 // clientProfile is a minimal parse of an OpenVPN client .ovpn/.conf for TUI import.
@@ -35,34 +37,9 @@ var (
 	rePathDir  = regexp.MustCompile(`(?i)^\s*(ca|cert|key|tls-crypt|tls-auth|secret)\s+(\S+)\s*$`)
 )
 
-var inlineTags = []string{"ca", "cert", "key", "tls-crypt", "tls-auth", "secret"}
-
-// extractInlineBlocks pulls <tag>...</tag> PEM sections (RE2 has no backrefs).
+// extractInlineBlocks pulls <tag>...</tag> PEM sections via shared confimport helper.
 func extractInlineBlocks(content string) (map[string]string, string) {
-	inline := map[string]string{}
-	body := content
-	for _, tag := range inlineTags {
-		open := "<" + tag + ">"
-		close := "</" + tag + ">"
-		for {
-			low := strings.ToLower(body)
-			i := strings.Index(low, open)
-			if i < 0 {
-				break
-			}
-			j := strings.Index(low[i+len(open):], close)
-			if j < 0 {
-				break
-			}
-			start := i + len(open)
-			end := i + len(open) + j
-			inline[tag] = strings.TrimSpace(body[start:end]) + "\n"
-			body = body[:i] + "\n" + body[end+len(close):]
-			low = strings.ToLower(body) // loop again if duplicates
-			_ = low
-		}
-	}
-	return inline, body
+	return confimport.ExtractInlineBlocks(content)
 }
 
 // parseClientProfileFile reads a client profile and extracts remotes + material paths.

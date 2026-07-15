@@ -195,11 +195,25 @@ func TestTierAFeatureMatrix(t *testing.T) {
 			want: []string{"comp-lzo no"},
 		},
 		{
-			name: "feature_sets udp_stuffing template",
+			name: "feature_sets udp_stuffing recipe",
 			mutate: func(i *db.Instance) {
 				i.FeatureSets = []string{"udp_stuffing"}
 			},
-			want: []string{"UDP stuffing", "# feature:udp_stuffing"},
+			want: []string{"UDP stuffing", "binary_name", "# feature:udp_stuffing", "stuffing-enable"},
+		},
+		{
+			name: "feature_sets auth_script_template",
+			mutate: func(i *db.Instance) {
+				i.FeatureSets = []string{"auth_script_template"}
+			},
+			want: []string{"script-security 2", "auth-user-pass-verify", "via-env"},
+		},
+		{
+			name: "feature_sets tls_modern",
+			mutate: func(i *db.Instance) {
+				i.FeatureSets = []string{"tls_modern"}
+			},
+			want: []string{"tls-version-min 1.2", "tls-groups X25519:P-256"},
 		},
 		{
 			name: "custom feature preset",
@@ -235,6 +249,56 @@ func TestTierAFeatureMatrix(t *testing.T) {
 			name: "client-config-dir",
 			mutate: func(i *db.Instance) {},
 			want:   []string{"client-config-dir /etc/openvpnd/instances/ccd/ovpn0"},
+		},
+		{
+			name: "server-bridge",
+			mutate: func(i *db.Instance) {
+				i.BridgeMode = true
+				i.BridgeGateway = "192.168.1.1"
+				i.BridgeNetmask = "255.255.255.0"
+				i.BridgePoolStart = "192.168.1.50"
+				i.BridgePoolEnd = "192.168.1.100"
+				i.DevType = "tap"
+			},
+			want:    []string{"server-bridge 192.168.1.1 255.255.255.0 192.168.1.50 192.168.1.100"},
+			notWant: []string{"server 10.8.0.0"},
+		},
+		{
+			name: "tls-groups",
+			mutate: func(i *db.Instance) { i.TLSGroups = "X25519:P-256" },
+			want:   []string{"tls-groups X25519:P-256"},
+		},
+		{
+			name: "tls-cipher",
+			mutate: func(i *db.Instance) { i.TLSCipher = "DEFAULT:!EXP" },
+			want:   []string{"tls-cipher DEFAULT:!EXP"},
+		},
+		{
+			name: "tls-ciphersuites",
+			mutate: func(i *db.Instance) { i.TLSCiphersuites = "TLS_AES_256_GCM_SHA384" },
+			want:   []string{"tls-ciphersuites TLS_AES_256_GCM_SHA384"},
+		},
+		{
+			name: "tls-cert-profile",
+			mutate: func(i *db.Instance) { i.TLSCertProfile = "preferred" },
+			want:   []string{"tls-cert-profile preferred"},
+		},
+		{
+			name: "auth-user-pass-verify",
+			mutate: func(i *db.Instance) {
+				i.AuthUserPassVerify = "/opt/auth.sh"
+				i.UsernameAsCommonName = true
+			},
+			want: []string{
+				"script-security 2",
+				"auth-user-pass-verify /opt/auth.sh via-env",
+				"username-as-common-name",
+			},
+		},
+		{
+			name:   "ifconfig-ipv6",
+			mutate: func(i *db.Instance) { i.IfconfigIPv6 = "fd00::1/64 fd00::2/64" },
+			want:   []string{"ifconfig-ipv6 fd00::1/64 fd00::2/64"},
 		},
 	}
 
@@ -294,5 +358,16 @@ func TestCCDMatrix(t *testing.T) {
 			PushRoutes: []string{"192.168.1.0/24"},
 		}, "10.8.0.0/24")
 		require.Contains(t, body, `push "route 192.168.1.0 255.255.255.0"`)
+	})
+	t.Run("push dns domain redirect disable", func(t *testing.T) {
+		body := confgen.RenderCCD(db.Client{
+			CommonName: "dave",
+			PushDNS:    []string{"8.8.8.8"}, PushDomain: "example.com",
+			RedirectGateway: true, DisablePush: []string{"route"},
+		}, "10.8.0.0/24")
+		require.Contains(t, body, `push "dhcp-option DNS 8.8.8.8"`)
+		require.Contains(t, body, `push "dhcp-option DOMAIN example.com"`)
+		require.Contains(t, body, `push "redirect-gateway def1 bypass-dhcp"`)
+		require.Contains(t, body, "push-remove route")
 	})
 }

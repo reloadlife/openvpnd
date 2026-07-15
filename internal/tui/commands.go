@@ -301,7 +301,7 @@ func doImportInstance(c *pkgapi.Client, content, sourcePath string) tea.Cmd {
 			return actionDoneMsg{err: err}
 		}
 		flash := "imported"
-		if out.Instance.Name != "" {
+		if out.Instance != nil && out.Instance.Name != "" {
 			flash += " " + out.Instance.Name
 		} else if sourcePath != "" {
 			flash += " " + sourcePath
@@ -310,12 +310,102 @@ func doImportInstance(c *pkgapi.Client, content, sourcePath string) tea.Cmd {
 	}
 }
 
+type discoverMsg struct {
+	cands []pkgapi.OpenVPNCandidate
+	err   error
+}
+
+type adoptDoneMsg struct {
+	resp pkgapi.AdoptInstanceResponse
+	err  error
+}
+
+func doDiscoverOpenVPN(c *pkgapi.Client) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		cands, err := c.DiscoverOpenVPN(ctx)
+		return discoverMsg{cands: cands, err: err}
+	}
+}
+
+func doAdoptInstance(c *pkgapi.Client, req pkgapi.AdoptInstanceRequest) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		out, err := c.AdoptInstance(ctx, req)
+		return adoptDoneMsg{resp: out, err: err}
+	}
+}
+
+func doMgmtCommand(c *pkgapi.Client, name string, req pkgapi.MgmtCommandRequest, flash string) tea.Cmd {
+	return doAction(func(ctx context.Context) error {
+		_, err := c.MgmtCommand(ctx, name, req)
+		return err
+	}, flash)
+}
+
+func doMgmtStatusDump(c *pkgapi.Client, name string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		// Prefer structured status; fall back to raw mgmt status.
+		st, err := c.InstanceStatus(ctx, name)
+		if err == nil {
+			var b strings.Builder
+			fmt.Fprintf(&b, "name=%s up=%v pid=%d\n", st.Name, st.Up, st.PID)
+			fmt.Fprintf(&b, "rx=%d tx=%d connected_clients=%d\n", st.RxBytes, st.TxBytes, st.ConnectedClients)
+			if st.Error != "" {
+				fmt.Fprintf(&b, "error=%s\n", st.Error)
+			}
+			if !st.UpdatedAt.IsZero() {
+				fmt.Fprintf(&b, "updated_at=%s\n", st.UpdatedAt.Format(time.RFC3339))
+			}
+			b.WriteString("\nclients:\n")
+			if len(st.Clients) == 0 {
+				b.WriteString("  (none)\n")
+			}
+			for _, cl := range st.Clients {
+				fmt.Fprintf(&b, "  %s  real=%s virt=%s rx=%d tx=%d since=%s\n",
+					cl.CommonName, cl.RealAddress, cl.VirtualAddress, cl.RxBytes, cl.TxBytes,
+					cl.ConnectedSince.Format(time.RFC3339))
+			}
+			return confViewMsg{title: name + " mgmt status", body: b.String()}
+		}
+		out, err2 := c.MgmtCommand(ctx, name, pkgapi.MgmtCommandRequest{Command: "status", Args: []string{"2"}})
+		if err2 != nil {
+			return confViewMsg{err: fmt.Errorf("status: %v; mgmt: %w", err, err2)}
+		}
+		return confViewMsg{title: name + " mgmt status", body: out.Output}
+	}
+}
+
+func doMgmtKillClient(c *pkgapi.Client, name, cn string) tea.Cmd {
+	return doMgmtCommand(c, name, pkgapi.MgmtCommandRequest{
+		Command: "kill", Args: []string{cn},
+	}, "killed "+cn)
+}
+
+func doMgmtSignal(c *pkgapi.Client, name, sig string) tea.Cmd {
+	return doMgmtCommand(c, name, pkgapi.MgmtCommandRequest{
+		Command: "signal", Args: []string{sig},
+	}, name+" signal "+sig)
+}
+
 func parseIntField(s string) (int, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return 0, nil
 	}
 	return strconv.Atoi(s)
+}
+
+func parseInt64Field(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, nil
+	}
+	return strconv.ParseInt(s, 10, 64)
 }
 
 func splitCSV(s string) []string {

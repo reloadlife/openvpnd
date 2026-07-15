@@ -655,6 +655,93 @@ func instanceCreateFields(binaries []string) []fieldDef {
 			Tip:  "Absolute path to the server private key (manual PKI). Leave empty with Issue cert ON. Must be readable by the openvpnd host.",
 		},
 
+		// ── Server advanced ──
+		{
+			Key: "max_clients", Label: "Max clients", Section: "Advanced (server)", Roles: []string{"server"},
+			Hint: "empty → OpenVPN default",
+			Tip:  "Maximum simultaneous VPN peers (OpenVPN --max-clients). Empty = daemon/OpenVPN default.",
+		},
+		{
+			Key: "tls_version_min", Label: "TLS min", Roles: []string{"server"},
+			Hint: "1.2 or 1.3",
+			Tip:  "Minimum TLS version for the control channel (tls-version-min). Prefer 1.2+.",
+		},
+		{
+			Key: "tls_groups", Label: "TLS groups", Roles: []string{"server"},
+			Hint: "X25519:secp256r1",
+			Tip:  "ECDH groups for TLS (tls-groups). Empty = OpenVPN defaults.",
+		},
+		{
+			Key: "tls_cipher", Label: "TLS cipher", Roles: []string{"server"},
+			Hint: "TLS 1.2 cipher list",
+			Tip:  "tls-cipher for TLS ≤1.2 control channel. Prefer Feature tls_modern for a sane preset.",
+		},
+		{
+			Key: "tls_ciphersuites", Label: "TLS suites", Roles: []string{"server"},
+			Hint: "TLS 1.3 ciphersuites",
+			Tip:  "tls-ciphersuites for TLS 1.3. Empty = OpenVPN defaults.",
+		},
+		{
+			Key: "tls_cert_profile", Label: "TLS profile", Roles: []string{"server"},
+			Hint: "preferred, suiteb-128,…",
+			Tip:  "tls-cert-profile constrains peer certificates (preferred/legacy/suiteb-*).",
+		},
+		{
+			Key: "tun_mtu", Label: "TUN MTU", Roles: []string{"server"},
+			Hint: "e.g. 1500",
+			Tip:  "Tunnel interface MTU (tun-mtu). Leave empty unless you tune path MTU.",
+		},
+		{
+			Key: "server_ipv6", Label: "Server IPv6", Roles: []string{"server"},
+			Hint: "fd00::/64",
+			Tip:  "IPv6 server network (server-ipv6). Enables dual-stack pool when set.",
+		},
+		{
+			Key: "ifconfig_ipv6", Label: "Ifconfig v6", Roles: []string{"server"},
+			Hint: "local/prefix [remote]",
+			Tip:  "Point-to-point IPv6 ifconfig-ipv6 when not using server-ipv6 pool mode.",
+		},
+		{
+			Key: "bridge_mode", Label: "Bridge mode", Kind: fieldBool, Roles: []string{"server"},
+			Hint: "tap + server-bridge",
+			Tip:  "ON = Ethernet bridge pool (usually with Dev type tap). Set gateway and pool below.",
+		},
+		{
+			Key: "bridge_gateway", Label: "Br gateway", Roles: []string{"server"},
+			Hint: "192.168.1.1",
+			Tip:  "LAN gateway IP for server-bridge (bridge_mode).",
+		},
+		{
+			Key: "bridge_pool_start", Label: "Br pool start", Roles: []string{"server"},
+			Hint: "192.168.1.100",
+			Tip:  "First DHCP-style address handed to bridge clients.",
+		},
+		{
+			Key: "bridge_pool_end", Label: "Br pool end", Roles: []string{"server"},
+			Hint: "192.168.1.200",
+			Tip:  "Last address in the bridge client pool.",
+		},
+		{
+			Key: "bridge_netmask", Label: "Br netmask", Roles: []string{"server"},
+			Hint: "255.255.255.0",
+			Tip:  "Netmask for server-bridge (dotted quad).",
+		},
+		{
+			Key: "auth_user_pass_verify", Label: "Auth script", Roles: []string{"server"},
+			Hint: "/path/to/verify via-env",
+			Tip:  "auth-user-pass-verify script path + method (via-env / via-file). Pair with script_security ≥2.",
+		},
+		{
+			Key: "script_security", Label: "Script sec", Roles: []string{"server"},
+			Hint: "0–3 (2 common with scripts)",
+			Tip:  "script-security level (0–3). Raise only when using external auth/up scripts.",
+		},
+		{
+			Key: "username_as_cn", Label: "User as CN", Kind: fieldBool, Roles: []string{"server"},
+			Hint: "username-as-common-name",
+			Tip:  "ON = treat auth username as CN for CCD/auth (username-as-common-name).",
+		},
+
 		// ── Client connect ──
 		{
 			Key: "profile", Label: "Profile", Section: "Connect (client)", Kind: fieldFile, AllowedTypes: []string{".ovpn", ".conf"}, Roles: []string{"client"},
@@ -665,6 +752,21 @@ func instanceCreateFields(binaries []string) []fieldDef {
 			Key: "remote", Label: "Remote(s)", Roles: []string{"client"},
 			Hint: "vpn.example.com:1194 or host:port:udp",
 			Tip:  "Where this client connects — required. CSV of host:port or host:port:proto. Filled automatically from Profile if present. Example: vpn.example.com:1194,backup:1194:udp",
+		},
+		{
+			Key: "auth_user_pass", Label: "User/pass", Kind: fieldBool, Roles: []string{"client"},
+			Hint: "prompt or file for username/password",
+			Tip:  "ON = enable auth-user-pass (username/password in addition to certs if required by server).",
+		},
+		{
+			Key: "auth_user_pass_file", Label: "Pass file", Kind: fieldFile, AllowedTypes: []string{".txt", ".pass", ".auth"}, Roles: []string{"client"},
+			Hint: "optional 2-line user/pass file",
+			Tip:  "Path to a 2-line credentials file for auth-user-pass. Leave empty to prompt at start (when supported).",
+		},
+		{
+			Key: "ifconfig_ipv6", Label: "Ifconfig v6", Roles: []string{"client"},
+			Hint: "local/prefix [remote]",
+			Tip:  "Client ifconfig-ipv6 when the server expects a fixed IPv6 endpoint.",
 		},
 		{
 			Key: "pki_ca", Label: "CA path", Kind: fieldFile, AllowedTypes: []string{".crt", ".pem", ".cer"}, Roles: []string{"client"},
@@ -715,8 +817,8 @@ func instanceCreateFields(binaries []string) []fieldDef {
 		// ── Extensions ──
 		{
 			Key: "features", Label: "Features", Section: "Extensions", Roles: []string{"server"},
-			Hint: "udp_stuffing,mssfix,…",
-			Tip:  "Named feature presets (CSV): bundles of extra directives, plugins, or env vars. Use for forks (e.g. udp_stuffing template) or small toggles like mssfix. List with GET /v1/features.",
+			Hint: "udp_stuffing_env,auth_script_template,tls_modern,…",
+			Tip:  "Named feature presets (CSV): directives/plugins/env (udp_stuffing, udp_stuffing_env, auth_script_template, tls_modern, mssfix…). List with GET /v1/features.",
 		},
 		{
 			Key: "plugin", Label: "Plugin", Kind: fieldFile, Section: "Extensions",
@@ -727,6 +829,36 @@ func instanceCreateFields(binaries []string) []fieldDef {
 			Key: "extra", Label: "Extra conf",
 			Hint: "raw openvpn lines",
 			Tip:  "Escape hatch: raw OpenVPN config lines appended to the generated conf (one directive per line). For fork-specific options not yet first-class fields. Use carefully — bad lines can prevent start.",
+		},
+	}
+}
+
+func adoptInstanceFields() []fieldDef {
+	return []fieldDef{
+		{
+			Key: "conf_path", Label: "Conf path", Section: "Adopt existing OpenVPN", Kind: fieldFile, AllowedTypes: []string{".conf", ".ovpn"},
+			Hint: "absolute path on daemon host",
+			Tip:  "On-disk OpenVPN conf the daemon will read (must be absolute and readable by openvpnd).",
+		},
+		{
+			Key: "name", Label: "Name",
+			Hint: "empty → from conf / auto",
+			Tip:  "Instance name after adopt. Empty lets the daemon choose from conf basename or auto.",
+		},
+		{
+			Key: "public_endpoint", Label: "Public EP",
+			Hint: "vpn.example.com:1194",
+			Tip:  "Optional host:port written into future client profiles for this server.",
+		},
+		{
+			Key: "take_over", Label: "Take over", Kind: fieldBool,
+			Hint: "document intent to manage process",
+			Tip:  "ON notes that you intend to stop the foreign process and run under openvpnd (v1 does not force-kill).",
+		},
+		{
+			Key: "pid", Label: "PID",
+			Hint: "optional from discover",
+			Tip:  "Optional process id from discover (stored in notes only).",
 		},
 	}
 }
@@ -761,6 +893,41 @@ func clientCreateFields(servers []string) []fieldDef {
 			Key: "iroutes", Label: "Iroutes",
 			Hint: "192.168.1.0/24,10.20.0.0/16",
 			Tip:  "Subnets behind this client (site-to-site). Emitted as CCD iroute so the server routes those nets via the client. CSV of CIDRs; optional.",
+		},
+		{
+			Key: "push_dns", Label: "Push DNS", Section: "Per-client push / limits",
+			Hint: "1.1.1.1,8.8.8.8",
+			Tip:  "Per-client DNS push (overrides/adds to server push). CSV of IPs; empty = server defaults only.",
+		},
+		{
+			Key: "push_domain", Label: "Push domain",
+			Hint: "internal.lan",
+			Tip:  "Per-client search domain pushed via CCD.",
+		},
+		{
+			Key: "redirect_gw", Label: "Redirect GW", Kind: fieldBool,
+			Hint: "full-tunnel for this user",
+			Tip:  "ON = push redirect-gateway for this client only (full tunnel).",
+		},
+		{
+			Key: "disable_push", Label: "Disable push",
+			Hint: "redirect-gateway,route-ipv6,…",
+			Tip:  "CSV of push options to strip for this client (push-remove style disable list).",
+		},
+		{
+			Key: "bandwidth_rx", Label: "BW RX bps",
+			Hint: "bytes/sec receive cap",
+			Tip:  "Soft receive bandwidth limit in bytes/sec (0/empty = unlimited).",
+		},
+		{
+			Key: "bandwidth_tx", Label: "BW TX bps",
+			Hint: "bytes/sec transmit cap",
+			Tip:  "Soft transmit bandwidth limit in bytes/sec (0/empty = unlimited).",
+		},
+		{
+			Key: "traffic_limit", Label: "Traffic cap",
+			Hint: "total bytes before suspend",
+			Tip:  "Lifetime limit in bytes; daemon may suspend when exceeded. 0/empty = none.",
 		},
 		{
 			Key: "issue_cert", Label: "Issue cert", Kind: fieldBool, Section: "One-shot provisioning",

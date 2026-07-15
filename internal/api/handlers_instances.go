@@ -3,15 +3,18 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/reloadlife/openvpnd/internal/adopt"
 	"github.com/reloadlife/openvpnd/internal/confgen"
 	"github.com/reloadlife/openvpnd/internal/confimport"
 	"github.com/reloadlife/openvpnd/internal/db"
 	"github.com/reloadlife/openvpnd/internal/instance"
+	"github.com/reloadlife/openvpnd/internal/netutil"
 	"github.com/reloadlife/openvpnd/internal/pki"
 	pkgapi "github.com/reloadlife/openvpnd/pkg/api"
 )
@@ -70,7 +73,67 @@ func (s *Server) handleImportInstance(w http.ResponseWriter, r *http.Request) {
 		parsed.Role = strings.ToLower(strings.TrimSpace(req.Role))
 	}
 
-	createReq := parsed.ToCreateRequest()
+	// create defaults to true when omitted (adopt-friendly).
+	doCreate := true
+	if req.Create != nil {
+		doCreate = *req.Create
+	}
+
+	// When creating, materialize inline PEM blocks under pki_dir/imported/<name>/.
+	if doCreate && parsed.HasInline() {
+		name, err := s.resolveImportName(r, req.Name)
+		if err != nil {
+			writeCreateError(w, err)
+			return
+		}
+		if strings.TrimSpace(s.cfg.OpenVPN.PKIDir) == "" {
+			writeError(w, http.StatusBadRequest, "pki_error",
+				"openvpn.pki_dir is required to materialize inline PEM blocks on import")
+			return
+		}
+		dest := filepath.Join(s.cfg.OpenVPN.PKIDir, "imported", name)
+		if err := parsed.Materialize(confimport.MaterializeOptions{DestDir: dest}); err != nil {
+			writeError(w, http.StatusInternalServerError, "materialize_error", err.Error())
+			return
+		}
+		// Ensure create uses the resolved name so paths and instance match.
+		if strings.TrimSpace(req.Name) == "" {
+			req.Name = name
+		}
+	}
+
+	createReq := applyImportOverrides(parsed.ToCreateRequest(), req)
+
+	resp := pkgapi.ImportInstanceResponse{
+		Parsed:   createReq,
+		Warnings: append([]string(nil), parsed.Warnings...),
+	}
+
+	if !doCreate {
+		resp.Created = false
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+
+	out, prepared, err := s.createInstanceFromRequest(r, createReq)
+	if err != nil {
+		writeCreateError(w, err)
+		return
+	}
+	inst := s.toAPIInstance(out)
+	resp.Instance = &inst
+	resp.AutoFilled = prepared.Auto
+	resp.Created = true
+	// Refresh parsed paths in response after materialize (createReq already has them).
+	resp.Parsed = createReq
+	resp.Warnings = append([]string(nil), parsed.Warnings...)
+	_ = s.store.AddEvent(r.Context(), "info", "import", out.Name, "", "instance imported from conf",
+		fmt.Sprintf(`{"auto":%q,"source":%q}`, strings.Join(prepared.Auto, ","), req.SourcePath))
+	writeJSON(w, http.StatusCreated, resp)
+}
+
+// applyImportOverrides folds ImportInstanceRequest fields onto a create request.
+func applyImportOverrides(createReq pkgapi.InstanceCreateRequest, req pkgapi.ImportInstanceRequest) pkgapi.InstanceCreateRequest {
 	if req.Name != "" {
 		createReq.Name = req.Name
 	}
@@ -88,21 +151,101 @@ func (s *Server) handleImportInstance(w http.ResponseWriter, r *http.Request) {
 		note := "# imported from " + req.SourcePath + "\n"
 		createReq.ExtraDirectives = note + createReq.ExtraDirectives
 	}
+	return createReq
+}
 
-	resp := pkgapi.ImportInstanceResponse{
-		Parsed:   createReq,
-		Warnings: append([]string(nil), parsed.Warnings...),
+// resolveImportName picks the instance name used for materialize dest and create.
+// Mirrors instance.Prepare naming when name is empty/auto.
+func (s *Server) resolveImportName(r *http.Request, requested string) (string, error) {
+	name := strings.TrimSpace(requested)
+	if name != "" && !netutil.IsAutoToken(name) {
+		if err := instance.ValidateName(name); err != nil {
+			return "", &createError{http.StatusBadRequest, "validation_error", err.Error()}
+		}
+		return name, nil
 	}
+	ctxBuild, err := s.buildInstanceContext(r)
+	if err != nil {
+		return "", err
+	}
+	// Match Prepare: next free ovpnN.
+	for i := 0; i < 1000; i++ {
+		n := fmt.Sprintf("ovpn%d", i)
+		if _, taken := ctxBuild.ExistingNames[n]; !taken {
+			return n, nil
+		}
+	}
+	return fmt.Sprintf("ovpn-%d", len(ctxBuild.ExistingNames)), nil
+}
 
-	// create defaults to true when omitted (adopt-friendly).
-	doCreate := true
-	if req.Create != nil {
-		doCreate = *req.Create
-	}
-	if !doCreate {
-		resp.Created = false
-		writeJSON(w, http.StatusOK, resp)
+func (s *Server) handleDiscoverOpenVPN(w http.ResponseWriter, r *http.Request) {
+	cands, err := adopt.DiscoverOpenVPN()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "discover_error", err.Error())
 		return
+	}
+	out := make([]pkgapi.OpenVPNCandidate, 0, len(cands))
+	for _, c := range cands {
+		out = append(out, pkgapi.OpenVPNCandidate{
+			PID: c.PID, ConfPath: c.ConfPath, Cmdline: c.Cmdline, Binary: c.Binary,
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleAdoptInstance(w http.ResponseWriter, r *http.Request) {
+	var req pkgapi.AdoptInstanceRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	confPath := strings.TrimSpace(req.ConfPath)
+	if confPath == "" {
+		writeError(w, http.StatusBadRequest, "bad_request", "conf_path is required")
+		return
+	}
+	if !filepath.IsAbs(confPath) {
+		writeError(w, http.StatusBadRequest, "bad_request", "conf_path must be an absolute path on the daemon host")
+		return
+	}
+
+	result, err := adopt.AdoptFromConf(confPath, req.Name)
+	if err != nil {
+		// Distinguish missing file vs parse/validation.
+		msg := err.Error()
+		status := http.StatusBadRequest
+		code := "adopt_error"
+		if strings.Contains(msg, "read conf:") {
+			status = http.StatusNotFound
+			code = "conf_not_found"
+		}
+		writeError(w, status, code, msg)
+		return
+	}
+
+	createReq := result.Request
+	if req.Enabled != nil {
+		createReq.Enabled = req.Enabled
+	}
+	if req.BinaryName != "" {
+		createReq.BinaryName = req.BinaryName
+	}
+	if req.PublicEndpoint != "" {
+		createReq.PublicEndpoint = req.PublicEndpoint
+	}
+
+	var notes []string
+	notes = append(notes, "adopted conf from daemon host path "+confPath)
+	if req.PID > 0 {
+		notes = append(notes, fmt.Sprintf("operator-supplied pid=%d (not attached)", req.PID))
+	}
+	if req.TakeOver {
+		notes = append(notes,
+			"take_over=true: stop the existing openvpn process (or disable its unit) so openvpnd can start a managed process; "+
+				"v1 does not force-stop foreign PIDs — after adopt, enable the instance and reconcile, or use instance down/up after stopping the old process")
+	} else {
+		notes = append(notes,
+			"take_over=false: instance is registered in desired state; if a foreign openvpn already holds the port, disable/stop it before enabling under openvpnd")
 	}
 
 	out, prepared, err := s.createInstanceFromRequest(r, createReq)
@@ -111,11 +254,18 @@ func (s *Server) handleImportInstance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	inst := s.toAPIInstance(out)
-	resp.Instance = &inst
-	resp.AutoFilled = prepared.Auto
-	resp.Created = true
-	_ = s.store.AddEvent(r.Context(), "info", "import", out.Name, "", "instance imported from conf",
-		fmt.Sprintf(`{"auto":%q,"source":%q}`, strings.Join(prepared.Auto, ","), req.SourcePath))
+	resp := pkgapi.AdoptInstanceResponse{
+		Instance:   &inst,
+		Parsed:     createReq,
+		Warnings:   result.Warnings,
+		AutoFilled: prepared.Auto,
+		Notes:      notes,
+		ConfPath:   confPath,
+		PID:        req.PID,
+	}
+	_ = s.store.AddEvent(r.Context(), "info", "adopt", out.Name, "", "instance adopted from conf path",
+		fmt.Sprintf(`{"auto":%q,"conf_path":%q,"take_over":%v,"pid":%d}`,
+			strings.Join(prepared.Auto, ","), confPath, req.TakeOver, req.PID))
 	writeJSON(w, http.StatusCreated, resp)
 }
 
@@ -190,7 +340,7 @@ func (s *Server) createInstanceFromRequest(r *http.Request, req pkgapi.InstanceC
 							Name: name, CommonName: name, CertPath: cp, KeyPath: kp, SerialNext: 2,
 						})
 					} else {
-						return db.Instance{}, instance.Result{}, &createError{http.StatusBadRequest, "pki_error", "create CA: "+err.Error()}
+						return db.Instance{}, instance.Result{}, &createError{http.StatusBadRequest, "pki_error", "create CA: " + err.Error()}
 					}
 				} else {
 					_, _ = s.store.UpsertCA(r.Context(), db.CA{
@@ -207,7 +357,7 @@ func (s *Server) createInstanceFromRequest(r *http.Request, req pkgapi.InstanceC
 		dns := []string{prepared.ServerCN}
 		issued, _, err := s.issueAndStore(r, caName, "server", prepared.ServerCN, 825, dns, nil, "", out.Name)
 		if err != nil {
-			return db.Instance{}, instance.Result{}, &createError{http.StatusBadRequest, "pki_error", "instance created but cert issue failed: "+err.Error()}
+			return db.Instance{}, instance.Result{}, &createError{http.StatusBadRequest, "pki_error", "instance created but cert issue failed: " + err.Error()}
 		}
 		ca, _ := s.store.GetCA(r.Context(), caName)
 		fresh, _ := s.store.GetInstance(r.Context(), out.Name)
@@ -306,13 +456,24 @@ func createInputFromAPI(req pkgapi.InstanceCreateRequest) (instance.CreateInput,
 		AuthMode: req.AuthMode, Cipher: req.Cipher, DataCiphers: req.DataCiphers, AuthDigest: req.AuthDigest,
 		PushRoutes: req.PushRoutes, PushDNS: req.PushDNS, PushDomain: req.PushDomain,
 		RedirectGateway: req.RedirectGateway,
-		PKICaPath: req.PKICaPath, PKICertPath: req.PKICertPath, PKIKeyPath: req.PKIKeyPath,
+		PKICaPath:       req.PKICaPath, PKICertPath: req.PKICertPath, PKIKeyPath: req.PKIKeyPath,
 		PKITLSCrypt: req.PKITLSCryptPath, PKIDHPath: req.PKIDHPath, StaticKeyPath: req.StaticKeyPath,
 		ExtraDirectives: req.ExtraDirectives,
-		Plugins: toDBPlugins(req.Plugins), EnvVars: toDBEnv(req.EnvVars), FeatureSets: req.FeatureSets,
+		Plugins:         toDBPlugins(req.Plugins), EnvVars: toDBEnv(req.EnvVars), FeatureSets: req.FeatureSets,
 		PreUp: req.PreUp, PostUp: req.PostUp, PreDown: req.PreDown, PostDown: req.PostDown,
 		PublicEndpoint: req.PublicEndpoint,
-		CAName: req.CAName, ServerCN: req.ServerCN, CreateCAIfEmpty: req.CreateCAIfEmpty,
+		MaxClients:     req.MaxClients, TLSVersionMin: req.TLSVersionMin,
+		TunMTU: req.TunMTU, Sndbuf: req.Sndbuf, Rcvbuf: req.Rcvbuf,
+		ServerIPv6: req.ServerIPv6, AuthUserPass: req.AuthUserPass,
+		BridgeMode: req.BridgeMode, BridgeGateway: req.BridgeGateway,
+		BridgePoolStart: req.BridgePoolStart, BridgePoolEnd: req.BridgePoolEnd, BridgeNetmask: req.BridgeNetmask,
+		TLSCipher: req.TLSCipher, TLSCiphersuites: req.TLSCiphersuites,
+		TLSGroups: req.TLSGroups, TLSCertProfile: req.TLSCertProfile,
+		AuthUserPassVerify: req.AuthUserPassVerify, ScriptSecurity: req.ScriptSecurity,
+		UsernameAsCommonName: req.UsernameAsCommonName,
+		AuthUserPassFile:     req.AuthUserPassFile,
+		IfconfigIPv6:         req.IfconfigIPv6,
+		CAName:               req.CAName, ServerCN: req.ServerCN, CreateCAIfEmpty: req.CreateCAIfEmpty,
 	}
 	if req.IssueServerCert != nil {
 		in.IssueServerCert = *req.IssueServerCert
@@ -461,6 +622,69 @@ func (s *Server) handleUpdateInstance(w http.ResponseWriter, r *http.Request) {
 	if req.PublicEndpoint != nil {
 		inst.PublicEndpoint = *req.PublicEndpoint
 	}
+	if req.MaxClients != nil {
+		inst.MaxClients = *req.MaxClients
+	}
+	if req.TLSVersionMin != nil {
+		inst.TLSVersionMin = *req.TLSVersionMin
+	}
+	if req.TunMTU != nil {
+		inst.TunMTU = *req.TunMTU
+	}
+	if req.Sndbuf != nil {
+		inst.Sndbuf = *req.Sndbuf
+	}
+	if req.Rcvbuf != nil {
+		inst.Rcvbuf = *req.Rcvbuf
+	}
+	if req.ServerIPv6 != nil {
+		inst.ServerIPv6 = *req.ServerIPv6
+	}
+	if req.AuthUserPass != nil {
+		inst.AuthUserPass = *req.AuthUserPass
+	}
+	if req.BridgeMode != nil {
+		inst.BridgeMode = *req.BridgeMode
+	}
+	if req.BridgeGateway != nil {
+		inst.BridgeGateway = *req.BridgeGateway
+	}
+	if req.BridgePoolStart != nil {
+		inst.BridgePoolStart = *req.BridgePoolStart
+	}
+	if req.BridgePoolEnd != nil {
+		inst.BridgePoolEnd = *req.BridgePoolEnd
+	}
+	if req.BridgeNetmask != nil {
+		inst.BridgeNetmask = *req.BridgeNetmask
+	}
+	if req.TLSCipher != nil {
+		inst.TLSCipher = *req.TLSCipher
+	}
+	if req.TLSCiphersuites != nil {
+		inst.TLSCiphersuites = *req.TLSCiphersuites
+	}
+	if req.TLSGroups != nil {
+		inst.TLSGroups = *req.TLSGroups
+	}
+	if req.TLSCertProfile != nil {
+		inst.TLSCertProfile = *req.TLSCertProfile
+	}
+	if req.AuthUserPassVerify != nil {
+		inst.AuthUserPassVerify = *req.AuthUserPassVerify
+	}
+	if req.ScriptSecurity != nil {
+		inst.ScriptSecurity = *req.ScriptSecurity
+	}
+	if req.UsernameAsCommonName != nil {
+		inst.UsernameAsCommonName = *req.UsernameAsCommonName
+	}
+	if req.AuthUserPassFile != nil {
+		inst.AuthUserPassFile = *req.AuthUserPassFile
+	}
+	if req.IfconfigIPv6 != nil {
+		inst.IfconfigIPv6 = *req.IfconfigIPv6
+	}
 	out, err := s.store.UpdateInstance(r.Context(), inst)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
@@ -564,6 +788,186 @@ func (s *Server) handleInstanceExport(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(res.Content))
 }
 
+// Allowed OpenVPN management commands (whitelist). Never pass arbitrary shell.
+var mgmtAllowedCommands = map[string]struct{}{
+	"status":    {},
+	"kill":      {},
+	"signal":    {},
+	"hold":      {},
+	"log":       {},
+	"state":     {},
+	"bytecount": {},
+	"pid":       {},
+	"version":   {},
+}
+
+// OpenVPN management signals commonly used for soft restart / reload / exit.
+var mgmtAllowedSignals = map[string]struct{}{
+	"SIGUSR1": {},
+	"SIGHUP":  {},
+	"SIGTERM": {},
+	"SIGUSR2": {},
+	"SIGINT":  {},
+}
+
+func (s *Server) handleInstanceStatus(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	inst, err := s.store.GetInstance(r.Context(), name)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", err.Error())
+		return
+	}
+
+	out := pkgapi.InstanceStatus{
+		Name: inst.Name,
+		PID:  inst.PID,
+	}
+	if s.cache != nil {
+		if st, ok := s.cache.GetInstance(name); ok {
+			out.Up = st.Up
+			if st.PID > 0 {
+				out.PID = st.PID
+			}
+			out.RxBytes = st.RxBytes
+			out.TxBytes = st.TxBytes
+			out.ConnectedClients = st.ConnectedClients
+			out.UpdatedAt = st.UpdatedAt
+		}
+	}
+
+	mgmt, err := s.backend.Management(r.Context(), name)
+	if err != nil {
+		// Instance may be down; return structured snapshot from cache/DB rather than hard fail.
+		if !out.Up {
+			out.Error = "instance not running or management unavailable: " + err.Error()
+			writeJSON(w, http.StatusOK, out)
+			return
+		}
+		out.Error = err.Error()
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+	defer func() { _ = mgmt.Close() }()
+
+	live, err := mgmt.Status(r.Context())
+	if err != nil {
+		out.Error = err.Error()
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+	out.Up = true
+	out.RxBytes = live.RxBytes
+	out.TxBytes = live.TxBytes
+	out.ConnectedClients = len(live.Clients)
+	out.UpdatedAt = live.UpdatedAt
+	if out.UpdatedAt.IsZero() {
+		out.UpdatedAt = time.Now().UTC()
+	}
+	if len(live.Clients) > 0 {
+		out.Clients = make([]pkgapi.InstanceStatusClient, 0, len(live.Clients))
+		for _, c := range live.Clients {
+			out.Clients = append(out.Clients, pkgapi.InstanceStatusClient{
+				CommonName:     c.CommonName,
+				RealAddress:    c.RealAddress,
+				VirtualAddress: c.VirtualAddress,
+				ConnectedSince: c.ConnectedSince,
+				RxBytes:        c.RxBytes,
+				TxBytes:        c.TxBytes,
+			})
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleInstanceMgmt(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	if _, err := s.store.GetInstance(r.Context(), name); err != nil {
+		writeError(w, http.StatusNotFound, "not_found", err.Error())
+		return
+	}
+
+	var req pkgapi.MgmtCommandRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+
+	cmd, err := buildMgmtCommand(req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+
+	mgmt, err := s.backend.Management(r.Context(), name)
+	if err != nil {
+		writeError(w, http.StatusConflict, "not_running", "management unavailable: "+err.Error())
+		return
+	}
+	defer func() { _ = mgmt.Close() }()
+
+	output, err := mgmt.Raw(r.Context(), cmd)
+	if err != nil {
+		// Return partial output with error when management replied ERROR:
+		if output != "" {
+			writeError(w, http.StatusBadGateway, "mgmt_error", err.Error()+"; output="+output)
+			return
+		}
+		writeError(w, http.StatusBadGateway, "mgmt_error", err.Error())
+		return
+	}
+
+	_ = s.store.AddEvent(r.Context(), "info", "mgmt", name, "", "management command",
+		fmt.Sprintf(`{"command":%q}`, cmd))
+	writeJSON(w, http.StatusOK, pkgapi.MgmtCommandResponse{Output: output})
+}
+
+// buildMgmtCommand validates the whitelist and assembles a single management line.
+func buildMgmtCommand(req pkgapi.MgmtCommandRequest) (string, error) {
+	verb := strings.ToLower(strings.TrimSpace(req.Command))
+	if verb == "" {
+		return "", fmt.Errorf("command is required")
+	}
+	if _, ok := mgmtAllowedCommands[verb]; !ok {
+		return "", fmt.Errorf("command %q not allowed; whitelist: status, kill, signal, hold, log, state, bytecount, pid, version", req.Command)
+	}
+	for i, a := range req.Args {
+		if strings.ContainsAny(a, "\r\n") {
+			return "", fmt.Errorf("args[%d] must not contain newlines", i)
+		}
+		if strings.TrimSpace(a) == "" {
+			return "", fmt.Errorf("args[%d] is empty", i)
+		}
+	}
+
+	switch verb {
+	case "kill":
+		if len(req.Args) < 1 {
+			return "", fmt.Errorf("kill requires args[0] = common name or IP:port")
+		}
+		// OpenVPN kill takes a single CN or IP:port token.
+		return "kill " + strings.TrimSpace(req.Args[0]), nil
+	case "signal":
+		if len(req.Args) < 1 {
+			return "", fmt.Errorf("signal requires args[0] = SIGUSR1|SIGHUP|SIGTERM|SIGUSR2|SIGINT")
+		}
+		sig := strings.ToUpper(strings.TrimSpace(req.Args[0]))
+		if _, ok := mgmtAllowedSignals[sig]; !ok {
+			return "", fmt.Errorf("signal %q not allowed; use SIGUSR1, SIGHUP, SIGTERM, SIGUSR2, or SIGINT", req.Args[0])
+		}
+		return "signal " + sig, nil
+	default:
+		if len(req.Args) == 0 {
+			return verb, nil
+		}
+		parts := make([]string, 0, 1+len(req.Args))
+		parts = append(parts, verb)
+		for _, a := range req.Args {
+			parts = append(parts, strings.TrimSpace(a))
+		}
+		return strings.Join(parts, " "), nil
+	}
+}
+
 func (s *Server) toAPIInstance(i db.Instance) pkgapi.Instance {
 	up := false
 	if s.cache != nil {
@@ -576,22 +980,30 @@ func (s *Server) toAPIInstance(i db.Instance) pkgapi.Instance {
 		BinaryName: i.BinaryName, BinaryPath: i.BinaryPath,
 		DevType: i.DevType, Device: i.Device, Proto: i.Proto,
 		LocalBind: i.LocalBind, Port: i.Port,
-		Remotes: toAPIRemotes(i.Remotes),
+		Remotes:       toAPIRemotes(i.Remotes),
 		ServerNetwork: i.ServerNetwork, Topology: i.Topology,
 		PoolStart: i.PoolStart, PoolEnd: i.PoolEnd,
 		AuthMode: i.AuthMode, Cipher: i.Cipher, DataCiphers: i.DataCiphers, AuthDigest: i.AuthDigest,
 		PushRoutes: i.PushRoutes, PushDNS: i.PushDNS, PushDomain: i.PushDomain,
 		RedirectGateway: i.RedirectGateway,
-		PKICaPath: i.PKICaPath, PKICertPath: i.PKICertPath, PKIKeyPath: i.PKIKeyPath,
+		PKICaPath:       i.PKICaPath, PKICertPath: i.PKICertPath, PKIKeyPath: i.PKIKeyPath,
 		PKITLSCryptPath: i.PKITLSCryptPath, PKIDHPath: i.PKIDHPath, PKICRLPath: i.PKICRLPath,
-		StaticKeyPath: i.StaticKeyPath,
+		StaticKeyPath:   i.StaticKeyPath,
 		ExtraDirectives: i.ExtraDirectives,
-		Plugins: toAPIPlugins(i.Plugins), EnvVars: toAPIEnv(i.EnvVars), FeatureSets: i.FeatureSets,
+		Plugins:         toAPIPlugins(i.Plugins), EnvVars: toAPIEnv(i.EnvVars), FeatureSets: i.FeatureSets,
 		PreUp: i.PreUp, PostUp: i.PostUp, PreDown: i.PreDown, PostDown: i.PostDown,
 		MaxClients: i.MaxClients, TLSVersionMin: i.TLSVersionMin, TunMTU: i.TunMTU,
 		Sndbuf: i.Sndbuf, Rcvbuf: i.Rcvbuf, ServerIPv6: i.ServerIPv6, AuthUserPass: i.AuthUserPass,
-		PublicEndpoint: i.PublicEndpoint,
-		PID: i.PID, LastError: i.LastError, ConnectedClients: i.ConnectedClients,
+		BridgeMode: i.BridgeMode, BridgeGateway: i.BridgeGateway,
+		BridgePoolStart: i.BridgePoolStart, BridgePoolEnd: i.BridgePoolEnd, BridgeNetmask: i.BridgeNetmask,
+		TLSCipher: i.TLSCipher, TLSCiphersuites: i.TLSCiphersuites,
+		TLSGroups: i.TLSGroups, TLSCertProfile: i.TLSCertProfile,
+		AuthUserPassVerify: i.AuthUserPassVerify, ScriptSecurity: i.ScriptSecurity,
+		UsernameAsCommonName: i.UsernameAsCommonName,
+		AuthUserPassFile:     i.AuthUserPassFile,
+		IfconfigIPv6:         i.IfconfigIPv6,
+		PublicEndpoint:       i.PublicEndpoint,
+		PID:                  i.PID, LastError: i.LastError, ConnectedClients: i.ConnectedClients,
 		RxBytes: i.LastRxBytes, TxBytes: i.LastTxBytes, RxBps: i.LastRxBps, TxBps: i.LastTxBps,
 		CreatedAt: i.CreatedAt, UpdatedAt: i.UpdatedAt,
 	}

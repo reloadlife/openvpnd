@@ -40,6 +40,12 @@ type DaemonConfig struct {
 		AllowHooks        bool              `mapstructure:"allow_hooks"`
 		UseMockBackend    bool              `mapstructure:"use_mock_backend"`
 		AdoptOnStart      bool              `mapstructure:"adopt_on_start"`
+		// BandwidthEnforcement: off | tc | shaper | log
+		// off: no shaping (traffic_limit_bytes suspend still works)
+		// tc: Linux tc HTB + ingress police per client static_ip (needs device name)
+		// shaper: global OpenVPN --shaper from max client limits (confgen)
+		// log: plan tc rules and log only (dry-run)
+		BandwidthEnforcement string `mapstructure:"bandwidth_enforcement"`
 	} `mapstructure:"openvpn"`
 	// PublicBaseURL is the externally reachable base (https://vpn.example.com) used
 	// when minting client profile download / OpenVPN Connect import links.
@@ -108,6 +114,17 @@ func LoadDaemon(path string) (*DaemonConfig, error) {
 	default:
 		return nil, fmt.Errorf("openvpn.persistence %q invalid (want database|conf|hybrid)", cfg.OpenVPN.Persistence)
 	}
+	cfg.OpenVPN.BandwidthEnforcement = strings.ToLower(strings.TrimSpace(cfg.OpenVPN.BandwidthEnforcement))
+	switch cfg.OpenVPN.BandwidthEnforcement {
+	case "", "off", "none", "false":
+		cfg.OpenVPN.BandwidthEnforcement = "off"
+	case "tc", "htb":
+		cfg.OpenVPN.BandwidthEnforcement = "tc"
+	case "shaper", "log":
+		// ok
+	default:
+		return nil, fmt.Errorf("openvpn.bandwidth_enforcement %q invalid (want off|tc|shaper|log)", cfg.OpenVPN.BandwidthEnforcement)
+	}
 	return &cfg, nil
 }
 
@@ -133,6 +150,7 @@ func setDaemonDefaults(v *viper.Viper) {
 	v.SetDefault("openvpn.allow_hooks", false)
 	v.SetDefault("openvpn.use_mock_backend", false)
 	v.SetDefault("openvpn.adopt_on_start", false)
+	v.SetDefault("openvpn.bandwidth_enforcement", "off")
 	v.SetDefault("public_base_url", "")
 	v.SetDefault("profile_links.default_ttl", "24h")
 	v.SetDefault("profile_links.default_max_uses", 1)

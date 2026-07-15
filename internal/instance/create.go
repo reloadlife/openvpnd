@@ -58,6 +58,29 @@ type CreateInput struct {
 	PostDown        string
 	PublicEndpoint  string
 
+	// Advanced knobs (migrations 00005/00006)
+	MaxClients           int
+	TLSVersionMin        string
+	TunMTU               int
+	Sndbuf               int
+	Rcvbuf               int
+	ServerIPv6           string
+	AuthUserPass         bool
+	BridgeMode           bool
+	BridgeGateway        string
+	BridgePoolStart      string
+	BridgePoolEnd        string
+	BridgeNetmask        string
+	TLSCipher            string
+	TLSCiphersuites      string
+	TLSGroups            string
+	TLSCertProfile       string
+	AuthUserPassVerify   string
+	ScriptSecurity       int
+	UsernameAsCommonName bool
+	AuthUserPassFile     string
+	IfconfigIPv6         string
+
 	// Automation flags
 	IssueServerCert  bool   // after create: issue server cert from CA
 	GenerateTLSCrypt bool   // with issue: also make tls-crypt
@@ -365,6 +388,25 @@ func Prepare(in CreateInput, ctx Context) (Result, error) {
 		Plugins: in.Plugins, EnvVars: in.EnvVars, FeatureSets: cleanList(in.FeatureSets),
 		PreUp: in.PreUp, PostUp: in.PostUp, PreDown: in.PreDown, PostDown: in.PostDown,
 		PublicEndpoint: publicEP,
+		MaxClients: in.MaxClients, TLSVersionMin: strings.TrimSpace(in.TLSVersionMin),
+		TunMTU: in.TunMTU, Sndbuf: in.Sndbuf, Rcvbuf: in.Rcvbuf,
+		ServerIPv6: strings.TrimSpace(in.ServerIPv6), AuthUserPass: in.AuthUserPass,
+		BridgeMode: in.BridgeMode, BridgeGateway: strings.TrimSpace(in.BridgeGateway),
+		BridgePoolStart: strings.TrimSpace(in.BridgePoolStart), BridgePoolEnd: strings.TrimSpace(in.BridgePoolEnd),
+		BridgeNetmask: strings.TrimSpace(in.BridgeNetmask),
+		TLSCipher: strings.TrimSpace(in.TLSCipher), TLSCiphersuites: strings.TrimSpace(in.TLSCiphersuites),
+		TLSGroups: strings.TrimSpace(in.TLSGroups), TLSCertProfile: strings.TrimSpace(in.TLSCertProfile),
+		AuthUserPassVerify: strings.TrimSpace(in.AuthUserPassVerify), ScriptSecurity: in.ScriptSecurity,
+		UsernameAsCommonName: in.UsernameAsCommonName,
+		AuthUserPassFile:     strings.TrimSpace(in.AuthUserPassFile),
+		IfconfigIPv6:         strings.TrimSpace(in.IfconfigIPv6),
+	}
+	if inst.BridgeMode {
+		if inst.BridgeGateway == "" || inst.BridgeNetmask == "" ||
+			inst.BridgePoolStart == "" || inst.BridgePoolEnd == "" {
+			return Result{}, fmt.Errorf("bridge_mode requires bridge_gateway, bridge_netmask, bridge_pool_start, bridge_pool_end")
+		}
+		// TAP is typical for ethernet bridging; leave DevType as requested (tap still ok without bridge).
 	}
 
 	// Validate plugins

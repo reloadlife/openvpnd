@@ -26,6 +26,7 @@ Default path after install: `/etc/openvpnd/config.yaml`
 | `openvpn.binaries` | Map of name → absolute openvpn path |
 | `openvpn.use_mock_backend` | Dev/CI without real openvpn |
 | `openvpn.allow_hooks` | Allow PreUp/PostUp shell hooks |
+| `openvpn.bandwidth_enforcement` | `off` (default) \| `tc` \| `shaper` \| `log` — per-client bandwidth shaping |
 | `public_base_url` | Public origin for profile links (`https://vpn.example.com`) |
 | `profile_links.default_ttl` | Default link lifetime (`24h`) |
 | `profile_links.default_max_uses` | Default downloads per link (`1`; `0` = unlimited until expiry) |
@@ -69,6 +70,24 @@ openvpn:
 ```
 
 Per instance: `binary_name: v24` or `binary_path: /custom/openvpn`.
+
+## Bandwidth enforcement
+
+Client fields `bandwidth_rx_bps` / `bandwidth_tx_bps` (bits/sec) and `traffic_limit_bytes` are stored in SQLite. Enforcement mode:
+
+| Mode | Behavior |
+|------|----------|
+| `off` | Default. No shaping. `traffic_limit_bytes` still suspends clients when exceeded. |
+| `tc` | Linux `tc` HTB (egress = client download) + ingress police (upload). Requires instance `device` (e.g. `tun0`) and `iproute2`. Soft no-op if `tc` is missing. |
+| `shaper` | Confgen emits global OpenVPN `shaper N` (bytes/sec) from max client limit. Outgoing only; not per-client. |
+| `log` | Plans the same `tc` rules as `tc` mode and logs them (dry-run). |
+
+```yaml
+openvpn:
+  bandwidth_enforcement: tc   # off | tc | shaper | log
+```
+
+Reconciler applies/removes rules after `EnsureInstance`. Removed clients or cleared limits drop host rules. Over-quota clients are suspended (`disable` in CCD) and killed via management if connected.
 
 ## IP assignment (no DHCP)
 

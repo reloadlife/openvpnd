@@ -136,3 +136,18 @@ func (m *mgmtConn) Signal(ctx context.Context, sig string) error {
 	_, err := m.command(ctx, "signal "+sig)
 	return err
 }
+
+// Raw sends a management command and returns the response body as a single string.
+// Lines are joined with "\n". SUCCESS lines are included; END is not.
+func (m *mgmtConn) Raw(ctx context.Context, cmd string) (string, error) {
+	cmd = strings.TrimSpace(cmd)
+	if cmd == "" {
+		return "", fmt.Errorf("empty management command")
+	}
+	if strings.ContainsAny(cmd, "\r\n") {
+		return "", fmt.Errorf("management command must be a single line")
+	}
+	lines, err := m.command(ctx, cmd)
+	out := strings.Join(lines, "\n")
+	return out, err
+}

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/reloadlife/openvpnd/internal/bandwidth"
 	"github.com/reloadlife/openvpnd/internal/confgen"
 	"github.com/reloadlife/openvpnd/internal/db"
 	"github.com/reloadlife/openvpnd/internal/features"
@@ -22,6 +23,8 @@ type Config struct {
 	DefaultBinary  string
 	SampleInterval time.Duration
 	AllowHooks     bool
+	// BandwidthEnforcement: off|tc|shaper|log (see config.DaemonConfig).
+	BandwidthEnforcement string
 }
 
 // MetricsObserver records reconcile timing (optional).
@@ -37,6 +40,7 @@ type Reconciler struct {
 	cfg     Config
 	log     *slog.Logger
 	metrics MetricsObserver
+	bw      *bandwidth.Enforcer
 
 	mu         sync.Mutex
 	prevSample map[string]sample // key instance/cn
@@ -65,8 +69,14 @@ func New(store *db.Store, backend ovpnbackend.Backend, cache *stats.Cache, cfg C
 		cache:      cache,
 		cfg:        cfg,
 		log:        log,
+		bw:         bandwidth.NewEnforcer(cfg.BandwidthEnforcement, log),
 		prevSample: make(map[string]sample),
 	}
+}
+
+// BandwidthEnforcer returns the shaping enforcer (tests may swap the runner).
+func (r *Reconciler) BandwidthEnforcer() *bandwidth.Enforcer {
+	return r.bw
 }
 
 // SetMetrics wires optional reconcile metrics.
@@ -147,6 +157,9 @@ func (r *Reconciler) run(ctx context.Context) error {
 		if _, ok := desiredNames[li.Name]; !ok {
 			r.log.Info("removing orphan instance", "name", li.Name)
 			_ = r.backend.RemoveInstance(ctx, li.Name)
+			if r.bw != nil {
+				_ = r.bw.ClearInstance(ctx, li.Name)
+			}
 		}
 	}
 	return nil
@@ -186,7 +199,10 @@ func (r *Reconciler) applyInstance(ctx context.Context, inst db.Instance) error 
 		Name:       inst.Name,
 	}
 	customPresets, _ := r.store.ListFeaturePresets(ctx)
-	rendered, err := confgen.RenderInstanceOpts(inst, paths, clients, confgen.RenderOptions{CustomPresets: customPresets})
+	rendered, err := confgen.RenderInstanceOpts(inst, paths, clients, confgen.RenderOptions{
+		CustomPresets:        customPresets,
+		BandwidthEnforcement: r.cfg.BandwidthEnforcement,
+	})
 	if err != nil {
 		return fmt.Errorf("render conf: %w", err)
 	}
@@ -233,6 +249,29 @@ func (r *Reconciler) applyInstance(ctx context.Context, inst db.Instance) error 
 		return err
 	}
 
+	// Bandwidth shaping sync (tc/log). shaper is conf-only; off is no-op.
+	if r.bw != nil && inst.Role == "server" {
+		if !inst.Enabled {
+			_ = r.bw.ClearInstance(ctx, inst.Name)
+		} else {
+			var limits []bandwidth.ClientLimit
+			for _, c := range clients {
+				if c.Suspended {
+					continue
+				}
+				limits = append(limits, bandwidth.ClientLimit{
+					CommonName: c.CommonName,
+					StaticIP:   c.StaticIP,
+					RxBps:      c.BandwidthRxBps,
+					TxBps:      c.BandwidthTxBps,
+				})
+			}
+			if err := r.bw.Sync(ctx, inst.Name, inst.Device, limits); err != nil {
+				r.log.Warn("bandwidth sync", "instance", inst.Name, "err", err)
+			}
+		}
+	}
+
 	// Sample live state
 	pid := 0
 	up := false
@@ -271,7 +310,8 @@ func (r *Reconciler) applyInstance(ctx context.Context, inst db.Instance) error 
 				for _, lc := range st.Clients {
 					byCN[lc.CommonName] = lc
 				}
-				for _, c := range clients {
+				for i := range clients {
+					c := clients[i]
 					lc, connected := byCN[c.CommonName]
 					crx, ctxb := c.LastRxBytes, c.LastTxBytes
 					crxBps, ctxBps := 0.0, 0.0
@@ -297,14 +337,34 @@ func (r *Reconciler) applyInstance(ctx context.Context, inst db.Instance) error 
 							}
 						}
 						r.prevSample[ck] = sample{rx: crx, tx: ctxb, at: now}
-						// enforce suspend
-						if c.Suspended {
-							if mgmt2, err := r.backend.Management(ctx, inst.Name); err == nil {
-								_ = mgmt2.KillClient(ctx, c.CommonName)
-								_ = mgmt2.Close()
+					}
+
+					// Traffic quota: suspend + kill when effective bytes exceed limit.
+					if !c.Suspended && c.TrafficLimitBytes > 0 {
+						tmp := c
+						tmp.LastRxBytes = crx
+						tmp.LastTxBytes = ctxb
+						if bandwidth.ExceedsTrafficLimit(tmp.EffectiveRx(), tmp.EffectiveTx(), c.TrafficLimitBytes) {
+							if err := r.store.SetClientSuspended(ctx, c.ID, true); err == nil {
+								c.Suspended = true
+								clients[i].Suspended = true
+								_ = r.store.AddEvent(ctx, "warn", "traffic_limit", inst.Name, c.CommonName,
+									fmt.Sprintf("traffic limit exceeded (%d bytes); client suspended", c.TrafficLimitBytes),
+									fmt.Sprintf(`{"rx":%d,"tx":%d,"limit":%d}`, tmp.EffectiveRx(), tmp.EffectiveTx(), c.TrafficLimitBytes))
+								r.log.Warn("traffic limit exceeded; suspending client",
+									"instance", inst.Name, "cn", c.CommonName,
+									"rx", tmp.EffectiveRx(), "tx", tmp.EffectiveTx(), "limit", c.TrafficLimitBytes)
 							}
 						}
 					}
+
+					if connected && c.Suspended {
+						if mgmt2, err := r.backend.Management(ctx, inst.Name); err == nil {
+							_ = mgmt2.KillClient(ctx, c.CommonName)
+							_ = mgmt2.Close()
+						}
+					}
+
 					_ = r.store.UpdateClientRuntime(ctx, c.ID, realAddr, virtAddr, since, crx, ctxb, crxBps, ctxBps)
 					if r.cache != nil {
 						r.cache.SetClient(stats.ClientStats{

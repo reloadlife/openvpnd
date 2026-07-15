@@ -95,7 +95,22 @@ type Instance struct {
 	Rcvbuf           int     `json:"rcvbuf,omitempty"`
 	ServerIPv6       string  `json:"server_ipv6,omitempty"`
 	AuthUserPass     bool    `json:"auth_user_pass,omitempty"`
-	ConfHash         string  `json:"conf_hash,omitempty"`
+	// Roadmap knobs (migration 00006): bridge, TLS control-channel, server auth scripts, dual-stack.
+	BridgeMode            bool   `json:"bridge_mode,omitempty"`
+	BridgeGateway         string `json:"bridge_gateway,omitempty"`
+	BridgePoolStart       string `json:"bridge_pool_start,omitempty"`
+	BridgePoolEnd         string `json:"bridge_pool_end,omitempty"`
+	BridgeNetmask         string `json:"bridge_netmask,omitempty"`
+	TLSCipher             string `json:"tls_cipher,omitempty"`
+	TLSCiphersuites       string `json:"tls_ciphersuites,omitempty"`
+	TLSGroups             string `json:"tls_groups,omitempty"`
+	TLSCertProfile        string `json:"tls_cert_profile,omitempty"`
+	AuthUserPassVerify    string `json:"auth_user_pass_verify,omitempty"`
+	ScriptSecurity        int    `json:"script_security,omitempty"`
+	UsernameAsCommonName  bool   `json:"username_as_common_name,omitempty"`
+	AuthUserPassFile      string `json:"auth_user_pass_file,omitempty"` // client: path after auth-user-pass
+	IfconfigIPv6          string `json:"ifconfig_ipv6,omitempty"`
+	ConfHash              string `json:"conf_hash,omitempty"`
 	PID              int     `json:"pid,omitempty"`
 	LastError        string  `json:"last_error,omitempty"`
 	LastRxBytes      int64   `json:"last_rx_bytes"`
@@ -120,6 +135,11 @@ type Client struct {
 	StaticIP          string    `json:"static_ip,omitempty"`
 	PushRoutes        []string  `json:"push_routes,omitempty"`
 	IRoutes           []string  `json:"iroutes,omitempty"` // client-side subnets (CCD iroute)
+	// Per-client push overrides (migration 00006).
+	PushDNS         []string `json:"push_dns,omitempty"`
+	PushDomain      string   `json:"push_domain,omitempty"`
+	RedirectGateway bool     `json:"redirect_gateway,omitempty"`
+	DisablePush     []string `json:"disable_push,omitempty"` // OpenVPN 2.5+ push-remove names
 	Suspended         bool      `json:"suspended"`
 	TrafficLimitBytes int64     `json:"traffic_limit_bytes"`
 	BandwidthRxBps    int64     `json:"bandwidth_rx_bps"`

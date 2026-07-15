@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/filepicker"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -35,6 +36,11 @@ const (
 	modeCAForm        = 10
 	modeIssueCertForm = 11
 	modePKIDetail     = 12
+	modeDiscover      = 13
+	modeAdoptForm     = 14
+	modePrompt        = 15
+
+	promptKillClient = "kill_client"
 )
 
 type confirmKind int
@@ -96,6 +102,16 @@ type rootModel struct {
 	confQR       string
 	profileLink  *pkgapi.ProfileLink
 	scroll       int
+
+	// Discover / adopt
+	discoverCands  []pkgapi.OpenVPNCandidate
+	discoverCursor int
+
+	// Simple text prompt (e.g. kill CN)
+	promptKind  string
+	promptTitle string
+	promptInput textinput.Model
+	promptArg   string // instance name etc.
 
 	fetchGen uint64
 	busy     bool
@@ -261,9 +277,54 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mode = modeConfView
 		return m, nil
 
+	case discoverMsg:
+		m.busy = false
+		if msg.err != nil {
+			m.err = msg.err.Error()
+			m.mode = modeList
+			return m, nil
+		}
+		m.discoverCands = msg.cands
+		m.discoverCursor = 0
+		m.err = ""
+		m.mode = modeDiscover
+		if len(msg.cands) == 0 {
+			m.status = "no running openvpn processes"
+		}
+		return m, nil
+
+	case adoptDoneMsg:
+		m.busy = false
+		if msg.err != nil {
+			m.err = msg.err.Error()
+			if m.mode == modeAdoptForm {
+				m.form.err = msg.err.Error()
+			}
+			return m, nil
+		}
+		m.err = ""
+		flash := "adopted"
+		if msg.resp.Instance != nil && msg.resp.Instance.Name != "" {
+			flash += " " + msg.resp.Instance.Name
+		}
+		if len(msg.resp.Notes) > 0 {
+			flash += " · " + msg.resp.Notes[0]
+		}
+		m.mode = modeList
+		m, flashCmd := m.setFlash(flash)
+		var fetch tea.Cmd
+		m, fetch = m.beginFetch()
+		return m, tea.Batch(flashCmd, fetch)
+
 	case tea.KeyMsg:
 		if m.mode == modeFilePick {
 			return m.handleFilePickKey(msg)
+		}
+		if m.mode == modePrompt {
+			return m.handlePromptKey(msg)
+		}
+		if m.mode == modeDiscover {
+			return m.handleDiscoverKey(msg)
 		}
 		if m.isFormMode() {
 			return m.handleFormKeyAll(msg)
@@ -285,7 +346,7 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m rootModel) isFormMode() bool {
 	return m.mode == modeInstForm || m.mode == modeClientForm || m.mode == modeBinaryForm ||
-		m.mode == modeCAForm || m.mode == modeIssueCertForm
+		m.mode == modeCAForm || m.mode == modeIssueCertForm || m.mode == modeAdoptForm
 }
 
 func (m *rootModel) refreshDetailPtrs() {
@@ -469,6 +530,8 @@ func (m rootModel) handleFormKeyAll(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.submitCAForm()
 		case modeIssueCertForm:
 			return m.submitIssueCertForm()
+		case modeAdoptForm:
+			return m.submitAdoptForm()
 		}
 	case "ctrl+o":
 		if m.form.Focused().Kind == fieldFile {
@@ -694,6 +757,10 @@ func (m rootModel) handleListKey(key string) (tea.Model, tea.Cmd) {
 	case "I":
 		if m.tab == tabInstances {
 			return m.openInstanceImportPicker()
+		}
+	case "A":
+		if m.tab == tabInstances {
+			return m.startDiscover()
 		}
 	case "enter", "l":
 		return m.openDetail()
@@ -996,6 +1063,29 @@ func (m rootModel) handleInstDetailKey(key string) (tea.Model, tea.Cmd) {
 		return m.startMutate(doInstanceUpDown(m.cfg.Client, name, false))
 	case "r":
 		return m.startMutate(doInstanceRestart(m.cfg.Client, name))
+	case "s":
+		// Soft reload via management SIGUSR1 (reconnect / re-read)
+		return m.startMutate(doMgmtSignal(m.cfg.Client, name, "SIGUSR1"))
+	case "m":
+		// Live management status dump
+		if m.busy {
+			return m, nil
+		}
+		m.busy = true
+		return m, doMgmtStatusDump(m.cfg.Client, name)
+	case "k":
+		// Kill connected client by CN
+		ti := textinput.New()
+		ti.Placeholder = "common name or IP:port"
+		ti.CharLimit = 256
+		ti.Width = max(24, m.width-20)
+		ti.Focus()
+		m.promptKind = promptKillClient
+		m.promptTitle = "Kill connected client on " + name
+		m.promptInput = ti
+		m.promptArg = name
+		m.mode = modePrompt
+		return m, textinput.Blink
 	case "e", "E":
 		return m.startMutate(doExportInstance(m.cfg.Client, name))
 	case "D":
@@ -1020,6 +1110,115 @@ func (m rootModel) handleInstDetailKey(key string) (tea.Model, tea.Cmd) {
 		m.detailInst = nil
 	}
 	return m, nil
+}
+
+func (m rootModel) startDiscover() (tea.Model, tea.Cmd) {
+	if m.busy {
+		return m, nil
+	}
+	m.busy = true
+	m.status = "discovering openvpn…"
+	return m, doDiscoverOpenVPN(m.cfg.Client)
+}
+
+func (m rootModel) handleDiscoverKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	switch key {
+	case "esc", "q":
+		m.mode = modeList
+		m.discoverCands = nil
+		return m, nil
+	case "j", "down":
+		if m.discoverCursor < len(m.discoverCands)-1 {
+			m.discoverCursor++
+		}
+	case "k", "up":
+		if m.discoverCursor > 0 {
+			m.discoverCursor--
+		}
+	case "g":
+		m.discoverCursor = 0
+	case "G":
+		m.discoverCursor = max(0, len(m.discoverCands)-1)
+	case "r":
+		return m.startDiscover()
+	case "n":
+		// manual adopt without a discover pick
+		return m.openAdoptForm("", 0)
+	case "enter", "l", "a":
+		if len(m.discoverCands) == 0 {
+			return m.openAdoptForm("", 0)
+		}
+		if m.discoverCursor < 0 || m.discoverCursor >= len(m.discoverCands) {
+			return m, nil
+		}
+		c := m.discoverCands[m.discoverCursor]
+		return m.openAdoptForm(c.ConfPath, c.PID)
+	}
+	return m, nil
+}
+
+func (m rootModel) openAdoptForm(confPath string, pid int) (tea.Model, tea.Cmd) {
+	vals := map[string]string{
+		"conf_path": confPath,
+		"take_over": "y",
+	}
+	if pid > 0 {
+		vals["pid"] = fmt.Sprintf("%d", pid)
+	}
+	m.form = newForm("Adopt instance from host conf", adoptInstanceFields(), vals)
+	m.form.note = "Daemon reads conf_path on its host. take_over notes intent; v1 does not force-kill the PID."
+	m.form.SetSize(m.width, m.formAreaHeight())
+	m.mode = modeAdoptForm
+	return m, nil
+}
+
+func (m rootModel) handlePromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	switch key {
+	case "esc":
+		m.mode = modeInstDetail
+		return m, nil
+	case "enter":
+		val := strings.TrimSpace(m.promptInput.Value())
+		if val == "" {
+			m.err = "value required"
+			return m, nil
+		}
+		switch m.promptKind {
+		case promptKillClient:
+			name := m.promptArg
+			m.mode = modeInstDetail
+			return m.startMutate(doMgmtKillClient(m.cfg.Client, name, val))
+		}
+		m.mode = modeList
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.promptInput, cmd = m.promptInput.Update(msg)
+	return m, cmd
+}
+
+func (m rootModel) submitAdoptForm() (tea.Model, tea.Cmd) {
+	v := m.form.Values()
+	confPath := strings.TrimSpace(v["conf_path"])
+	if confPath == "" {
+		m.form.err = "conf_path required (absolute path on daemon host)"
+		return m, nil
+	}
+	if !filepath.IsAbs(confPath) {
+		m.form.err = "conf_path must be absolute"
+		return m, nil
+	}
+	pid, _ := parseIntField(v["pid"])
+	req := pkgapi.AdoptInstanceRequest{
+		ConfPath:       confPath,
+		Name:           strings.TrimSpace(v["name"]),
+		PublicEndpoint: strings.TrimSpace(v["public_endpoint"]),
+		TakeOver:       truthy(v["take_over"]),
+		PID:            pid,
+	}
+	return m.startMutate(doAdoptInstance(m.cfg.Client, req))
 }
 
 func (m rootModel) handleClientDetailKey(key string) (tea.Model, tea.Cmd) {
@@ -1128,6 +1327,7 @@ func (m rootModel) submitInstForm() (tea.Model, tea.Cmd) {
 		PKITLSCryptPath: v["tls_crypt_path"], StaticKeyPath: v["static_key"],
 		ExtraDirectives: v["extra"],
 		FeatureSets:     splitCSV(v["features"]),
+		IfconfigIPv6:    v["ifconfig_ipv6"],
 	}
 	if pl := strings.TrimSpace(v["plugin"]); pl != "" {
 		parts := strings.Fields(pl)
@@ -1153,9 +1353,28 @@ func (m rootModel) submitInstForm() (tea.Model, tea.Cmd) {
 		req.CreateCAIfEmpty = truthy(v["create_ca"])
 		req.IssueServerCert = &issue
 		req.GenerateTLSCrypt = &tlsCrypt
+
+		req.MaxClients, _ = parseIntField(v["max_clients"])
+		req.TLSVersionMin = v["tls_version_min"]
+		req.TLSGroups = v["tls_groups"]
+		req.TLSCipher = v["tls_cipher"]
+		req.TLSCiphersuites = v["tls_ciphersuites"]
+		req.TLSCertProfile = v["tls_cert_profile"]
+		req.TunMTU, _ = parseIntField(v["tun_mtu"])
+		req.ServerIPv6 = v["server_ipv6"]
+		req.BridgeMode = truthy(v["bridge_mode"])
+		req.BridgeGateway = v["bridge_gateway"]
+		req.BridgePoolStart = v["bridge_pool_start"]
+		req.BridgePoolEnd = v["bridge_pool_end"]
+		req.BridgeNetmask = v["bridge_netmask"]
+		req.AuthUserPassVerify = v["auth_user_pass_verify"]
+		req.ScriptSecurity, _ = parseIntField(v["script_security"])
+		req.UsernameAsCommonName = truthy(v["username_as_cn"])
 	} else {
 		// client instance: outbound connection
 		req.Remote = v["remote"]
+		req.AuthUserPass = truthy(v["auth_user_pass"])
+		req.AuthUserPassFile = v["auth_user_pass_file"]
 		// Don't auto-issue server certs for clients
 		f := false
 		req.IssueServerCert = &f
@@ -1187,10 +1406,23 @@ func (m rootModel) submitClientForm() (tea.Model, tea.Cmd) {
 	mint := truthy(v["mint_link"])
 	req := pkgapi.ClientCreateRequest{
 		CommonName: cn, Name: v["name"], StaticIP: v["static_ip"], Notes: v["notes"],
-		IRoutes:        splitCSV(v["iroutes"]),
-		ClientCertPath: v["cert_path"], ClientKeyPath: v["key_path"],
+		IRoutes:         splitCSV(v["iroutes"]),
+		PushDNS:         splitCSV(v["push_dns"]),
+		PushDomain:      v["push_domain"],
+		RedirectGateway: truthy(v["redirect_gw"]),
+		DisablePush:     splitCSV(v["disable_push"]),
+		ClientCertPath:  v["cert_path"], ClientKeyPath: v["key_path"],
 		IssueCert: &issue, MintProfileLink: mint,
 		ProfileLinkTTL: v["link_ttl"], ProfileLinkNote: v["notes"],
+	}
+	if n, err := parseInt64Field(v["bandwidth_rx"]); err == nil {
+		req.BandwidthRxBps = n
+	}
+	if n, err := parseInt64Field(v["bandwidth_tx"]); err == nil {
+		req.BandwidthTxBps = n
+	}
+	if n, err := parseInt64Field(v["traffic_limit"]); err == nil {
+		req.TrafficLimitBytes = n
 	}
 	if uses := strings.TrimSpace(v["link_uses"]); uses != "" {
 		if n, err := parseIntField(uses); err == nil {
@@ -1290,7 +1522,7 @@ func (m rootModel) View() string {
 			warnStyle.Render("Confirm") + "\n\n" + m.confirmText + "\n\n" +
 				helpStyle.Render("[y] yes   [n / esc] cancel"),
 		)
-	case modeInstForm, modeClientForm, modeBinaryForm, modeCAForm, modeIssueCertForm:
+	case modeInstForm, modeClientForm, modeBinaryForm, modeCAForm, modeIssueCertForm, modeAdoptForm:
 		m.form.SetSize(w, mainH)
 		mid = m.form.View()
 	case modeFilePick:
@@ -1307,6 +1539,10 @@ func (m rootModel) View() string {
 		b.WriteString("\n")
 		b.WriteString(helpStyle.Render("j/k move  ·  enter select  ·  h/backspace parent  ·  ctrl+g cancel"))
 		mid = panelStyle.Width(w).Height(mainH).MaxHeight(mainH).Render(b.String())
+	case modeDiscover:
+		mid = fillHeight(m.viewDiscover(w, mainH), w, mainH)
+	case modePrompt:
+		mid = fillHeight(m.viewPrompt(w, mainH), w, mainH)
 	case modeInstDetail:
 		mid = fillHeight(m.viewInstDetail(w, mainH), w, mainH)
 	case modeClientDetail:
@@ -1349,14 +1585,18 @@ func (m rootModel) View() string {
 
 func (m rootModel) chromeHelp() string {
 	switch m.mode {
-	case modeInstForm, modeClientForm, modeBinaryForm, modeCAForm, modeIssueCertForm:
+	case modeInstForm, modeClientForm, modeBinaryForm, modeCAForm, modeIssueCertForm, modeAdoptForm:
 		return "tab/↑↓ fields  ·  ←/→ role & toggles  ·  space/ctrl+o browse file  ·  enter save  ·  esc cancel"
 	case modeFilePick:
 		return "j/k navigate  ·  enter select file  ·  h parent dir  ·  ctrl+g cancel"
 	case modeConfirm:
 		return "y confirm  ·  n/esc cancel"
+	case modeDiscover:
+		return "j/k pick process  ·  enter/a adopt  ·  n manual path  ·  r refresh  ·  esc back"
+	case modePrompt:
+		return "type value  ·  enter submit  ·  esc cancel"
 	case modeInstDetail:
-		return "u/d up/down  ·  r restart  ·  e export  ·  n new client  ·  D delete  ·  esc back  ·  q quit"
+		return "u/d up/down  ·  r restart  ·  s SIGUSR1  ·  m status  ·  k kill CN  ·  e export  ·  n client  ·  D delete  ·  esc"
 	case modeClientDetail:
 		return "s/S suspend/resume  ·  t reset traffic  ·  c .ovpn  ·  p/L profile link  ·  i issue-cert  ·  D delete  ·  esc back"
 	case modePKIDetail:
@@ -1372,7 +1612,7 @@ func (m rootModel) listHelp() string {
 	base := "1-6 tabs  ·  j/k  ·  enter detail  ·  n new  ·  r refresh  ·  R reconcile  ·  q quit"
 	switch m.tab {
 	case tabInstances:
-		return base + "  ·  u/d up/down  ·  I import  ·  D delete"
+		return base + "  ·  u/d up/down  ·  I import  ·  A adopt  ·  D delete"
 	case tabClients:
 		return base + "  ·  s/S suspend/resume  ·  D delete"
 	case tabPKI:
@@ -1625,6 +1865,51 @@ func (m rootModel) viewEvents(w, mainH int) string {
 	return b.String()
 }
 
+func (m rootModel) viewDiscover(w, h int) string {
+	var body strings.Builder
+	body.WriteString(titleStyle.Render("Discover running OpenVPN"))
+	body.WriteString("\n")
+	body.WriteString(dimStyle.Render("Pick a process (conf or PID) → adopt form. n = manual conf path."))
+	body.WriteString("\n\n")
+	if len(m.discoverCands) == 0 {
+		body.WriteString(dimStyle.Render("(no openvpn processes found on daemon host)"))
+		body.WriteString("\n")
+		return panelStyle.Width(w).Height(h).MaxHeight(h).Render(body.String())
+	}
+	cw := colWidths(w-2, []int{8, 28, 16, 20}, 3)
+	hdr := fmt.Sprintf("%s %s %s %s",
+		padCell("PID", cw[0]), padCell("CONF", cw[1]), padCell("BINARY", cw[2]), padCell("CMDLINE", cw[3]))
+	body.WriteString(headerStyle.Render(hdr))
+	body.WriteString("\n")
+	for i, c := range m.discoverCands {
+		line := fmt.Sprintf("%s %s %s %s",
+			padCell(fmt.Sprintf("%d", c.PID), cw[0]),
+			padCell(orDash(c.ConfPath), cw[1]),
+			padCell(orDash(c.Binary), cw[2]),
+			padCell(c.Cmdline, cw[3]),
+		)
+		if i == m.discoverCursor {
+			body.WriteString(selStyle.Width(w).Render(line))
+		} else {
+			body.WriteString(line)
+		}
+		body.WriteString("\n")
+	}
+	return panelStyle.Width(w).Height(h).MaxHeight(h).Render(body.String())
+}
+
+func (m rootModel) viewPrompt(w, h int) string {
+	var body strings.Builder
+	body.WriteString(titleStyle.Render(m.promptTitle))
+	body.WriteString("\n\n")
+	body.WriteString(labelStyle.Render("Value"))
+	body.WriteString("  ")
+	body.WriteString(m.promptInput.View())
+	body.WriteString("\n\n")
+	body.WriteString(dimStyle.Render("enter submit · esc cancel"))
+	return panelStyle.Width(w).Height(h).MaxHeight(h).Render(body.String())
+}
+
 func (m rootModel) viewInstDetail(w, h int) string {
 	inst := m.detailInst
 	if inst == nil {
@@ -1647,11 +1932,30 @@ func (m rootModel) viewInstDetail(w, h int) string {
 	kv("Network", orDash(inst.ServerNetwork)+"  topology="+orDash(inst.Topology))
 	kv("Public EP", orDash(inst.PublicEndpoint))
 	kv("PKI CA", orDash(inst.PKICaPath))
+	if inst.MaxClients > 0 {
+		kv("Max clients", fmt.Sprintf("%d", inst.MaxClients))
+	}
+	if inst.TLSVersionMin != "" {
+		kv("TLS min", inst.TLSVersionMin)
+	}
+	if inst.BridgeMode {
+		kv("Bridge", fmt.Sprintf("%s pool %s–%s mask %s",
+			orDash(inst.BridgeGateway), orDash(inst.BridgePoolStart), orDash(inst.BridgePoolEnd), orDash(inst.BridgeNetmask)))
+	}
+	if inst.ServerIPv6 != "" {
+		kv("Server IPv6", inst.ServerIPv6)
+	}
+	if len(inst.FeatureSets) > 0 {
+		kv("Features", strings.Join(inst.FeatureSets, ", "))
+	}
 	kv("Clients", fmt.Sprintf("%d connected (live)", inst.ConnectedClients))
 	kv("Traffic", formatBytes(inst.RxBytes)+" / "+formatBytes(inst.TxBytes))
 	if inst.LastError != "" {
 		kv("Error", inst.LastError)
 	}
+	body.WriteString("\n")
+	body.WriteString(dimStyle.Render("m status · k kill · s SIGUSR1 · r restart · e export"))
+	body.WriteString("\n")
 	var related []pkgapi.ServerClient
 	for _, cl := range m.clients {
 		if cl.InstanceName == inst.Name {
@@ -1685,6 +1989,18 @@ func (m rootModel) viewClientDetail(w, h int) string {
 	kv("Static IP", orDash(cl.StaticIP))
 	kv("Push routes", orDash(strings.Join(cl.PushRoutes, ", ")))
 	kv("Iroutes", orDash(strings.Join(cl.IRoutes, ", ")))
+	kv("Push DNS", orDash(strings.Join(cl.PushDNS, ", ")))
+	kv("Push domain", orDash(cl.PushDomain))
+	kv("Redirect GW", fmt.Sprintf("%v", cl.RedirectGateway))
+	if len(cl.DisablePush) > 0 {
+		kv("Disable push", strings.Join(cl.DisablePush, ", "))
+	}
+	if cl.BandwidthRxBps > 0 || cl.BandwidthTxBps > 0 {
+		kv("Bandwidth", fmt.Sprintf("rx=%d tx=%d bps", cl.BandwidthRxBps, cl.BandwidthTxBps))
+	}
+	if cl.TrafficLimitBytes > 0 {
+		kv("Traffic cap", formatBytes(cl.TrafficLimitBytes))
+	}
 	kv("Suspended", fmt.Sprintf("%v", cl.Suspended))
 	kv("Connected", fmt.Sprintf("%v  %s", cl.Connected, orDash(cl.ConnectedSince)))
 	kv("Real addr", orDash(cl.RealAddress))

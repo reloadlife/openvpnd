@@ -9,6 +9,7 @@ import (
 
 const clientColumns = `
 c.id, c.instance_id, c.common_name, c.name, c.notes, c.static_ip, c.push_routes, c.iroutes,
+c.push_dns, c.push_domain, c.redirect_gateway, c.disable_push,
 c.suspended, c.traffic_limit_bytes, c.bandwidth_rx_bps, c.bandwidth_tx_bps, c.cert_ref,
 c.client_cert_path, c.client_key_path,
 c.rx_bytes_offset, c.tx_bytes_offset,
@@ -20,11 +21,12 @@ func scanClient(scanner interface {
 	Scan(dest ...any) error
 }) (Client, error) {
 	var c Client
-	var suspended int
-	var pushRoutes, iroutes, tags string
+	var suspended, redirect int
+	var pushRoutes, iroutes, pushDNS, disablePush, tags string
 	var created, updated string
 	err := scanner.Scan(
 		&c.ID, &c.InstanceID, &c.CommonName, &c.Name, &c.Notes, &c.StaticIP, &pushRoutes, &iroutes,
+		&pushDNS, &c.PushDomain, &redirect, &disablePush,
 		&suspended, &c.TrafficLimitBytes, &c.BandwidthRxBps, &c.BandwidthTxBps, &c.CertRef,
 		&c.ClientCertPath, &c.ClientKeyPath,
 		&c.RxBytesOffset, &c.TxBytesOffset,
@@ -36,8 +38,11 @@ func scanClient(scanner interface {
 		return Client{}, err
 	}
 	c.Suspended = suspended != 0
+	c.RedirectGateway = redirect != 0
 	c.PushRoutes = decodeJSONList(pushRoutes)
 	c.IRoutes = decodeJSONList(iroutes)
+	c.PushDNS = decodeJSONList(pushDNS)
+	c.DisablePush = decodeJSONList(disablePush)
 	c.Tags = decodeJSONList(tags)
 	c.CreatedAt = parseTime(created)
 	c.UpdatedAt = parseTime(updated)
@@ -61,14 +66,16 @@ func (s *Store) CreateClient(ctx context.Context, instanceName string, c Client)
 	res, err := s.db.ExecContext(ctx, `
 INSERT INTO clients (
   instance_id, common_name, name, notes, static_ip, push_routes, iroutes,
+  push_dns, push_domain, redirect_gateway, disable_push,
   suspended, traffic_limit_bytes, bandwidth_rx_bps, bandwidth_tx_bps, cert_ref,
   client_cert_path, client_key_path,
   rx_bytes_offset, tx_bytes_offset,
   real_address, virtual_address, connected_since,
   last_rx_bytes, last_tx_bytes, last_rx_bps, last_tx_bps, tags,
   created_at, updated_at
-) VALUES (?,?,?,?,?,?,?, ?,?,?,?,?, ?,?, 0,0, '','','', 0,0,0,0, ?, ?,?)`,
+) VALUES (?,?,?,?,?,?,?, ?,?,?,?, ?,?,?,?,?, ?,?, 0,0, '','','', 0,0,0,0, ?, ?,?)`,
 		inst.ID, c.CommonName, c.Name, c.Notes, c.StaticIP, encodeJSONList(c.PushRoutes), encodeJSONList(c.IRoutes),
+		encodeJSONList(c.PushDNS), c.PushDomain, boolToInt(c.RedirectGateway), encodeJSONList(c.DisablePush),
 		boolToInt(c.Suspended), c.TrafficLimitBytes, c.BandwidthRxBps, c.BandwidthTxBps, c.CertRef,
 		c.ClientCertPath, c.ClientKeyPath,
 		encodeJSONList(c.Tags), now, now,
@@ -168,10 +175,12 @@ func (s *Store) UpdateClient(ctx context.Context, instanceName, cn string, c Cli
 	_, err = s.db.ExecContext(ctx, `
 UPDATE clients SET
   name=?, notes=?, static_ip=?, push_routes=?, iroutes=?,
+  push_dns=?, push_domain=?, redirect_gateway=?, disable_push=?,
   suspended=?, traffic_limit_bytes=?, bandwidth_rx_bps=?, bandwidth_tx_bps=?,
   cert_ref=?, client_cert_path=?, client_key_path=?, tags=?, updated_at=?
 WHERE id=?`,
 		c.Name, c.Notes, c.StaticIP, encodeJSONList(c.PushRoutes), encodeJSONList(c.IRoutes),
+		encodeJSONList(c.PushDNS), c.PushDomain, boolToInt(c.RedirectGateway), encodeJSONList(c.DisablePush),
 		boolToInt(c.Suspended), c.TrafficLimitBytes, c.BandwidthRxBps, c.BandwidthTxBps,
 		c.CertRef, c.ClientCertPath, c.ClientKeyPath, encodeJSONList(c.Tags), now, existing.ID,
 	)

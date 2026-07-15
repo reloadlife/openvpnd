@@ -29,13 +29,74 @@ Authentication: `Authorization: Bearer <auth.token>` on all `/v1/*` routes.
 |--------|------|
 | GET/POST | `/v1/instances` |
 | POST | `/v1/instances/import` |
+| POST | `/v1/instances/adopt` |
+| GET | `/v1/instances/discover` |
 | GET/PATCH/DELETE | `/v1/instances/{name}` |
 | POST | `/v1/instances/{name}/up` |
 | POST | `/v1/instances/{name}/down` |
 | POST | `/v1/instances/{name}/restart` |
 | GET | `/v1/instances/{name}/export` |
+| GET | `/v1/instances/{name}/status` |
+| POST | `/v1/instances/{name}/mgmt` |
 
 `role` is `server` or `client`. `binary_name` selects a registry entry; `binary_path` overrides.
+
+### Live status (management interface)
+
+`GET /v1/instances/{name}/status` returns structured live status sampled from the OpenVPN management socket when the process is up:
+
+```json
+{
+  "name": "ovpn0",
+  "up": true,
+  "pid": 1234,
+  "rx_bytes": 1000,
+  "tx_bytes": 2000,
+  "connected_clients": 1,
+  "clients": [
+    {
+      "common_name": "alice",
+      "real_address": "1.2.3.4:5678",
+      "virtual_address": "10.8.0.2",
+      "rx_bytes": 1000,
+      "tx_bytes": 2000
+    }
+  ],
+  "updated_at": "…"
+}
+```
+
+If the instance exists but management is unreachable, the handler still returns `200` with `up: false` and an `error` string (not a hard 5xx).
+
+### Management commands (whitelist)
+
+`POST /v1/instances/{name}/mgmt` runs a **single whitelisted** OpenVPN management command. There is no unrestricted raw shell or free-form management RPC.
+
+Body:
+
+```json
+{ "command": "status|kill|signal|hold|log|state|bytecount|pid|version", "args": ["..."] }
+```
+
+| Command | Args | Notes |
+|---------|------|--------|
+| `status` | optional (e.g. `"2"`) | Dump status; prefer version 2 CSV |
+| `kill` | **required** `args[0]` = CN or `IP:port` | Disconnect a client without suspend flag |
+| `signal` | **required** `args[0]` | `SIGUSR1`, `SIGHUP`, `SIGTERM`, `SIGUSR2`, `SIGINT` |
+| `hold` | optional (`on` / `release` / …) | Hold / release start |
+| `log` | optional | Management log on/off/n |
+| `state` | optional | Connection state dump |
+| `bytecount` | optional interval | Enable periodic bytecount |
+| `pid` | none | OpenVPN process pid |
+| `version` | none | OpenVPN + management version |
+
+Response:
+
+```json
+{ "output": "SUCCESS: …" }
+```
+
+Unknown commands, missing kill/signal args, disallowed signals, or newlines in args → `400`. Instance not running → `409 not_running`. Management ERROR reply → `502 mgmt_error`.
 
 ### Import / adopt existing conf
 
@@ -74,6 +135,32 @@ Response:
 ```
 
 `instance` / `auto_filled` are present only when `create=true`. When the conf already has cert+key paths, auto PKI issue is disabled.
+
+### Adopt on-disk conf / discover running processes
+
+`POST /v1/instances/adopt` reads a conf **path on the daemon host**, parses it (same mapper as import), and creates an instance.
+
+```json
+{
+  "conf_path": "/etc/openvpn/server.conf",
+  "name": "optional",
+  "enabled": true,
+  "binary_name": "default",
+  "take_over": false,
+  "public_endpoint": "",
+  "pid": 0
+}
+```
+
+| Field | Notes |
+|-------|--------|
+| `conf_path` | Required absolute path readable by openvpnd |
+| `take_over` | When true, response `notes` tell the operator to stop the foreign process so openvpnd can manage it (v1 does **not** SIGTERM foreign PIDs) |
+| `pid` | Optional context from discover; recorded in notes only |
+
+Response includes `instance`, `parsed`, `warnings`, `auto_filled`, `notes`, `conf_path`.
+
+`GET /v1/instances/discover` lists running OpenVPN candidates from `/proc` (`pid`, `conf_path`, `cmdline`, `binary`). Conf path is taken from `--config` / bare `*.conf` argv when present.
 
 ### Create smart defaults / validation
 

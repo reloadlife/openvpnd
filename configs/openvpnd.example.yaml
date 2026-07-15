@@ -41,6 +41,12 @@ openvpn:
   allow_hooks: false
   # use_mock_backend: true  # for dev/CI without openvpn binary
   adopt_on_start: false
+  # Per-client bandwidth_rx_bps / bandwidth_tx_bps enforcement:
+  #   off    — disabled (default); traffic_limit_bytes suspend still works
+  #   tc     — Linux tc HTB + ingress police (needs instance device name + iproute2)
+  #   shaper — global OpenVPN --shaper from max client limit (outgoing only)
+  #   log    — plan tc rules and log only (dry-run)
+  bandwidth_enforcement: "off"
 
 log:
   level: info

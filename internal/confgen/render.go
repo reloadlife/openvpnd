@@ -15,6 +15,9 @@ import (
 // RenderOptions optionally supplies custom feature presets from the DB.
 type RenderOptions struct {
 	CustomPresets []db.FeaturePreset
+	// BandwidthEnforcement: off|tc|shaper|log — when "shaper", emit global OpenVPN --shaper
+	// from the max of client bandwidth_* limits (bytes/sec). No per-client shaping in conf.
+	BandwidthEnforcement string
 }
 
 // Paths holds runtime path helpers for an instance.
@@ -159,6 +162,18 @@ func RenderInstanceOpts(inst db.Instance, paths Paths, clients []db.Client, opts
 	if inst.TLSVersionMin != "" {
 		fmt.Fprintf(&b, "tls-version-min %s\n", inst.TLSVersionMin)
 	}
+	if inst.TLSCipher != "" {
+		fmt.Fprintf(&b, "tls-cipher %s\n", inst.TLSCipher)
+	}
+	if inst.TLSCiphersuites != "" {
+		fmt.Fprintf(&b, "tls-ciphersuites %s\n", inst.TLSCiphersuites)
+	}
+	if inst.TLSGroups != "" {
+		fmt.Fprintf(&b, "tls-groups %s\n", inst.TLSGroups)
+	}
+	if inst.TLSCertProfile != "" {
+		fmt.Fprintf(&b, "tls-cert-profile %s\n", inst.TLSCertProfile)
+	}
 	if inst.TunMTU > 0 {
 		fmt.Fprintf(&b, "tun-mtu %d\n", inst.TunMTU)
 	}
@@ -168,8 +183,30 @@ func RenderInstanceOpts(inst db.Instance, paths Paths, clients []db.Client, opts
 	if inst.Rcvbuf > 0 {
 		fmt.Fprintf(&b, "rcvbuf %d\n", inst.Rcvbuf)
 	}
-	if inst.Role == "client" && inst.AuthUserPass {
-		fmt.Fprintf(&b, "auth-user-pass\n")
+	if inst.IfconfigIPv6 != "" {
+		fmt.Fprintf(&b, "ifconfig-ipv6 %s\n", inst.IfconfigIPv6)
+	}
+	if inst.Role == "client" {
+		if strings.TrimSpace(inst.AuthUserPassFile) != "" {
+			fmt.Fprintf(&b, "auth-user-pass %s\n", strings.TrimSpace(inst.AuthUserPassFile))
+		} else if inst.AuthUserPass {
+			fmt.Fprintf(&b, "auth-user-pass\n")
+		}
+	}
+	if inst.Role == "server" && strings.TrimSpace(inst.AuthUserPassVerify) != "" {
+		sec := inst.ScriptSecurity
+		if sec == 0 {
+			sec = 2
+		}
+		fmt.Fprintf(&b, "script-security %d\n", sec)
+		method := "via-file"
+		if sec >= 2 {
+			method = "via-env"
+		}
+		fmt.Fprintf(&b, "auth-user-pass-verify %s %s\n", strings.TrimSpace(inst.AuthUserPassVerify), method)
+		if inst.UsernameAsCommonName {
+			fmt.Fprintf(&b, "username-as-common-name\n")
+		}
 	}
 
 	fmt.Fprintf(&b, "keepalive 10 60\n")
@@ -186,7 +223,29 @@ func RenderInstanceOpts(inst db.Instance, paths Paths, clients []db.Client, opts
 		fmt.Fprintf(&b, "\n# extensions (feature_sets + extra_directives)\n%s\n", extra)
 	}
 
-	_ = clients
+	// Global OpenVPN --shaper (outgoing only). Per-client shaping is tc/log via reconciler.
+	if strings.EqualFold(strings.TrimSpace(opts.BandwidthEnforcement), "shaper") && inst.Role == "server" {
+		var maxBits int64
+		for _, c := range clients {
+			if c.BandwidthRxBps > maxBits {
+				maxBits = c.BandwidthRxBps
+			}
+			if c.BandwidthTxBps > maxBits {
+				maxBits = c.BandwidthTxBps
+			}
+		}
+		if maxBits > 0 {
+			// --shaper takes bytes/sec; client fields are bits/sec (see bandwidth package).
+			bytesPerSec := maxBits / 8
+			if bytesPerSec < 1 {
+				bytesPerSec = 1
+			}
+			fmt.Fprintf(&b, "\n# bandwidth_enforcement=shaper (global outgoing; max of client limits)\n")
+			fmt.Fprintf(&b, "shaper %d\n", bytesPerSec)
+		} else if len(clients) > 0 {
+			fmt.Fprintf(&b, "\n# bandwidth_enforcement=shaper: no client bandwidth_* limits set\n")
+		}
+	}
 
 	content := b.String()
 	return RenderResult{Content: content, Hash: Hash(content)}, nil
@@ -211,7 +270,16 @@ func renderServer(b *strings.Builder, inst db.Instance, paths Paths) error {
 	fmt.Fprintf(b, "mode server\n")
 	fmt.Fprintf(b, "tls-server\n")
 
-	if inst.ServerNetwork != "" {
+	if inst.BridgeMode {
+		gw := strings.TrimSpace(inst.BridgeGateway)
+		mask := strings.TrimSpace(inst.BridgeNetmask)
+		poolStart := strings.TrimSpace(inst.BridgePoolStart)
+		poolEnd := strings.TrimSpace(inst.BridgePoolEnd)
+		if gw == "" || mask == "" || poolStart == "" || poolEnd == "" {
+			return fmt.Errorf("bridge_mode requires bridge_gateway, bridge_netmask, bridge_pool_start, bridge_pool_end")
+		}
+		fmt.Fprintf(b, "server-bridge %s %s %s %s\n", gw, mask, poolStart, poolEnd)
+	} else if inst.ServerNetwork != "" {
 		netw, mask, err := netutil.ServerNetworkToOpenVPN(inst.ServerNetwork)
 		if err != nil {
 			return err
@@ -227,7 +295,8 @@ func renderServer(b *strings.Builder, inst db.Instance, paths Paths) error {
 	}
 	fmt.Fprintf(b, "topology %s\n", topo)
 
-	if inst.PoolStart != "" && inst.PoolEnd != "" {
+	// ifconfig-pool is for non-bridge topology; bridge pool is part of server-bridge.
+	if !inst.BridgeMode && inst.PoolStart != "" && inst.PoolEnd != "" {
 		fmt.Fprintf(b, "ifconfig-pool %s %s\n", inst.PoolStart, inst.PoolEnd)
 	}
 	if inst.MaxClients > 0 {
@@ -329,6 +398,27 @@ func RenderCCD(c db.Client, serverNetwork string) string {
 			}
 		}
 		fmt.Fprintf(&b, `push "route %s"`+"\n", r)
+	}
+	for _, d := range c.PushDNS {
+		d = strings.TrimSpace(d)
+		if d == "" {
+			continue
+		}
+		fmt.Fprintf(&b, `push "dhcp-option DNS %s"`+"\n", d)
+	}
+	if strings.TrimSpace(c.PushDomain) != "" {
+		fmt.Fprintf(&b, `push "dhcp-option DOMAIN %s"`+"\n", strings.TrimSpace(c.PushDomain))
+	}
+	if c.RedirectGateway {
+		fmt.Fprintf(&b, `push "redirect-gateway def1 bypass-dhcp"`+"\n")
+	}
+	// OpenVPN 2.5+: push-remove <opt> undoes a server-level push for this client.
+	for _, opt := range c.DisablePush {
+		opt = strings.TrimSpace(opt)
+		if opt == "" {
+			continue
+		}
+		fmt.Fprintf(&b, "push-remove %s\n", opt)
 	}
 	// iroute tells the server which subnets live behind this client (site-to-site).
 	for _, r := range c.IRoutes {

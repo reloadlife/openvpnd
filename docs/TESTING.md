@@ -12,13 +12,14 @@ We do **not** require 100% line coverage on TUI/CLI chrome; we require behaviora
 ## Quick commands
 
 ```bash
-make test          # race + count=1, all packages
-make test-unit     # fast packages (no race): netutil instance confgen features db
-make test-api      # API + PKI + profile integration-style tests
-make test-race     # full with -race
-make cover         # total coverage summary
-make cover-html    # coverage.html for browser
-make test-feature  # confgen + features + profile only (OpenVPN surface)
+make test              # race + count=1, all packages (excludes //go:build integration)
+make test-unit         # fast packages (no race): netutil instance confgen features db
+make test-api          # API + PKI + profile integration-style tests
+make test-race         # full with -race
+make cover             # total coverage summary
+make cover-html        # coverage.html for browser
+make test-feature      # confgen + features + profile only (OpenVPN surface)
+make test-integration  # host OpenVPN backend (skips if openvpn/CAP missing)
 ```
 
 ## Suites
@@ -33,6 +34,7 @@ make test-feature  # confgen + features + profile only (OpenVPN surface)
 | **obs** | metrics, snmp | Scrapes / MIB |
 | **tui-logic** | tui (parse/import) | .ovpn import parsing only |
 | **feature** | confgen + features | OpenVPN directive emission |
+| **integration** | ovpnbackend (+ reconcile) with `-tags=integration` | Live host backend / openvpn binary |
 
 ### Recommended CI order
 
@@ -41,6 +43,8 @@ make test-unit
 make test-feature
 make test-api
 make test-race
+# optional on privileged lab hosts with openvpn installed:
+make test-integration
 ```
 
 ## Coverage targets (policy)
@@ -88,12 +92,49 @@ Feature presets: one expand test per builtin ID (or a single table over all buil
 - Temp dirs for PKI PEM material (`t.TempDir()`).
 - No live OpenVPN process required for unit/api suites (host backend is integration-only).
 
+## Host backend integration (`make test-integration`)
+
+Live tests live under `internal/ovpnbackend/host_integration_test.go` with:
+
+```go
+//go:build integration
+```
+
+Default `go test ./...` and `make test` **do not** build or run them.
+
+### Requirements (lab / deploy host)
+
+| Requirement | Behavior if missing |
+|-------------|---------------------|
+| `openvpn` on `PATH` or a common path (`/usr/sbin/openvpn`, …) | test **skips** |
+| root **or** effective `CAP_NET_ADMIN` (TUN) | test **skips** |
+| ability to bind a high localhost UDP port (default `25194`) | may fail (not silent skip) |
+
+What the suite does (short timeout, `t.TempDir` for conf/runtime):
+
+1. `ProbeBinary` against the discovered openvpn binary.
+2. Generate a static key (`openvpn --genkey secret …`).
+3. `EnsureInstance` with a minimal p2p/static-key conf (no PKI).
+4. Assert the process reports **Up**, optionally dial management, then `StopInstance`.
+
+Run:
+
+```bash
+make test-integration
+# equivalent:
+go test -tags=integration -count=1 ./internal/ovpnbackend/ ./internal/reconcile/ -timeout 120s
+```
+
+Optional later: privileged / self-hosted CI job. Unit suites stay mock-only.
+
+Pure helpers used by the host path (`FindOpenVPN`, version/PID parsing, …) have ordinary unit tests (no build tag).
+
 ## Planned tests (not yet full)
 
 | Gap | Plan |
 |-----|------|
 | Reconciler unit | Ensure conf write + EnsureInstance with mock |
-| Host backend | Integration tag `//go:build integration` when openvpn installed |
+| Host backend CI | Privileged / self-hosted job for `make test-integration` |
 | TUI model keys | golden / scripted bubbletea later |
 | CLI cobra | smoke `go test` with args if extracted from main |
 | SNMP bulk walk | Expand agent_test |

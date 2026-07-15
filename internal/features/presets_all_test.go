@@ -1,6 +1,7 @@
 package features_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -12,17 +13,43 @@ import (
 // TestEveryBuiltinPresetExpands ensures each shipped feature_set ID produces conf material.
 func TestEveryBuiltinPresetExpands(t *testing.T) {
 	require.NotEmpty(t, features.Builtin)
+	// Known builtin IDs (guards against accidental rename/drop).
+	wantIDs := map[string]bool{
+		"explicit_exit_notify": true,
+		"mssfix":               true,
+		"verb_4":               true,
+		"fast_io":              true,
+		"udp_stuffing":         true,
+		"udp_stuffing_env":     true,
+		"auth_script_template": true,
+		"tls_modern":           true,
+		"comp_lzo_no":          true,
+	}
+	gotIDs := map[string]bool{}
 	for _, p := range features.Builtin {
+		gotIDs[p.ID] = true
 		t.Run(p.ID, func(t *testing.T) {
 			extra, plugins, env := features.Expand([]string{p.ID}, nil, "", nil, nil)
-			// udp_stuffing is comment-only template; others should emit directives or be non-empty notes
+			// Every builtin should contribute conf comments and/or plugins/env.
 			if p.ExtraDirectives != "" {
 				require.NotEmpty(t, extra, "preset %s should expand extra", p.ID)
 				require.Contains(t, extra, "# feature:"+p.ID)
 			}
-			_ = plugins
-			_ = env
+			if len(p.EnvVars) > 0 {
+				require.NotEmpty(t, env, "preset %s should expand env", p.ID)
+			}
+			if len(p.Plugins) > 0 {
+				require.NotEmpty(t, plugins, "preset %s should expand plugins", p.ID)
+			}
+			// Practical presets: at least one of extra/env/plugins non-empty.
+			require.True(t,
+				strings.TrimSpace(extra) != "" || len(env) > 0 || len(plugins) > 0,
+				"preset %s expanded to nothing", p.ID,
+			)
 		})
+	}
+	for id := range wantIDs {
+		require.True(t, gotIDs[id], "missing builtin preset %s", id)
 	}
 }
 

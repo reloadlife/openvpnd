@@ -57,6 +57,9 @@ type MgmtClient interface {
 	Status(ctx context.Context) (LiveInstance, error)
 	KillClient(ctx context.Context, cnOrAddr string) error
 	Signal(ctx context.Context, sig string) error
+	// Raw sends a single management command and returns the response body
+	// (lines until END / SUCCESS / ERROR). ERROR responses return a non-nil error.
+	Raw(ctx context.Context, cmd string) (string, error)
 	Close() error
 }
 

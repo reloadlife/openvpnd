@@ -61,12 +61,12 @@ func TestAPIFlow(t *testing.T) {
 	// create server instance (disable auto PKI — no CA in this test)
 	noIssue := false
 	body := pkgapi.InstanceCreateRequest{
-		Name:          "ovpn0",
-		Role:          "server",
-		BinaryName:    "v26",
-		Port:          1194,
-		ServerNetwork: "10.8.0.0/24",
-		Topology:      "subnet",
+		Name:            "ovpn0",
+		Role:            "server",
+		BinaryName:      "v26",
+		Port:            1194,
+		ServerNetwork:   "10.8.0.0/24",
+		Topology:        "subnet",
 		IssueServerCert: &noIssue,
 	}
 	b, _ := json.Marshal(body)
@@ -143,8 +143,8 @@ func TestProfileLink(t *testing.T) {
 	noIssue := false
 	ib, _ := json.Marshal(pkgapi.InstanceCreateRequest{
 		Name: "ovpn0", Role: "server", ServerNetwork: "10.8.0.0/24",
-		PublicEndpoint: "vpn.example.com:1194",
-		PKICaPath:      ca,
+		PublicEndpoint:  "vpn.example.com:1194",
+		PKICaPath:       ca,
 		IssueServerCert: &noIssue,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/v1/instances", bytes.NewReader(ib))
@@ -455,3 +455,392 @@ client-to-client
 	require.NoError(t, err)
 	require.Len(t, list, 1)
 }
+
+func TestImportInstanceInlinePEMs(t *testing.T) {
+	store, err := db.Open(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+
+	ctx := context.Background()
+	require.NoError(t, store.EnsureBinaryDefaults(ctx, map[string]string{
+		"default": "/usr/sbin/openvpn",
+	}))
+
+	pkiDir := t.TempDir()
+	cfg := &config.DaemonConfig{}
+	cfg.Auth.Token = "test-token"
+	cfg.OpenVPN.DefaultBinary = "default"
+	cfg.OpenVPN.ConfDir = filepath.Join(t.TempDir(), "conf")
+	cfg.OpenVPN.RuntimeDir = filepath.Join(t.TempDir(), "run")
+	cfg.OpenVPN.PKIDir = pkiDir
+
+	backend := ovpnbackend.NewMock()
+	cache := stats.NewCache()
+	rec := reconcile.New(store, backend, cache, reconcile.Config{
+		ConfDir: cfg.OpenVPN.ConfDir, RuntimeDir: cfg.OpenVPN.RuntimeDir, DefaultBinary: "default",
+	}, slog.Default())
+	srv := api.NewServer(store, backend, cache, rec, cfg, slog.Default())
+	router := srv.Router()
+	auth := func(req *http.Request) {
+		req.Header.Set("Authorization", "Bearer test-token")
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	inlineClient := `
+client
+dev tun
+proto udp
+remote vpn.example.com 1194
+cipher AES-256-GCM
+auth SHA256
+<ca>
+-----BEGIN CERTIFICATE-----
+CA_INLINE
+-----END CERTIFICATE-----
+</ca>
+<cert>
+-----BEGIN CERTIFICATE-----
+CERT_INLINE
+-----END CERTIFICATE-----
+</cert>
+<key>
+-----BEGIN PRIVATE KEY-----
+KEY_INLINE
+-----END PRIVATE KEY-----
+</key>
+<tls-crypt>
+-----BEGIN OpenVPN Static key V1-----
+TC_INLINE
+-----END OpenVPN Static key V1-----
+</tls-crypt>
+explicit-exit-notify 1
+`
+
+	// preview keeps inline warnings and does not write files
+	noCreate := false
+	previewBody, _ := json.Marshal(pkgapi.ImportInstanceRequest{
+		Content: inlineClient,
+		Create:  &noCreate,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/instances/import", bytes.NewReader(previewBody))
+	auth(req)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	var preview pkgapi.ImportInstanceResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &preview))
+	require.False(t, preview.Created)
+	require.Equal(t, "client", preview.Parsed.Role)
+	require.Empty(t, preview.Parsed.PKICaPath)
+	require.NotEmpty(t, preview.Warnings)
+	require.Contains(t, preview.Warnings[0], "inline <")
+
+	// create materializes under pki_dir/imported/<name>
+	doCreate := true
+	createBody, _ := json.Marshal(pkgapi.ImportInstanceRequest{
+		Name:       "inline-client",
+		Content:    inlineClient,
+		Create:     &doCreate,
+		BinaryName: "default",
+	})
+	req = httptest.NewRequest(http.MethodPost, "/v1/instances/import", bytes.NewReader(createBody))
+	auth(req)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
+	var created pkgapi.ImportInstanceResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &created))
+	require.True(t, created.Created)
+	require.NotNil(t, created.Instance)
+	require.Equal(t, "inline-client", created.Instance.Name)
+	require.Equal(t, "client", created.Instance.Role)
+
+	wantCA := filepath.Join(pkiDir, "imported", "inline-client", "ca.crt")
+	wantCert := filepath.Join(pkiDir, "imported", "inline-client", "client.crt")
+	wantKey := filepath.Join(pkiDir, "imported", "inline-client", "client.key")
+	wantTC := filepath.Join(pkiDir, "imported", "inline-client", "tls-crypt.key")
+	require.Equal(t, wantCA, created.Instance.PKICaPath)
+	require.Equal(t, wantCert, created.Instance.PKICertPath)
+	require.Equal(t, wantKey, created.Instance.PKIKeyPath)
+	require.Equal(t, wantTC, created.Instance.PKITLSCryptPath)
+	require.FileExists(t, wantCA)
+	require.FileExists(t, wantCert)
+	require.FileExists(t, wantKey)
+	require.FileExists(t, wantTC)
+	// Inline PEM warnings cleared after materialize.
+	for _, w := range created.Warnings {
+		require.NotContains(t, w, "inline <")
+	}
+	caPEM, err := os.ReadFile(wantCA)
+	require.NoError(t, err)
+	require.Contains(t, string(caPEM), "CA_INLINE")
+}
+
+func TestAdoptAndDiscover(t *testing.T) {
+	store, err := db.Open(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+
+	ctx := context.Background()
+	require.NoError(t, store.EnsureBinaryDefaults(ctx, map[string]string{
+		"default": "/usr/sbin/openvpn",
+	}))
+
+	dir := t.TempDir()
+	confPath := filepath.Join(dir, "legacy-server.conf")
+	conf := `
+port 1201
+proto udp
+dev tun
+topology subnet
+server 10.77.0.0 255.255.255.0
+ca /etc/openvpn/ca.crt
+cert /etc/openvpn/server.crt
+key /etc/openvpn/server.key
+cipher AES-256-GCM
+auth SHA256
+push "dhcp-option DNS 9.9.9.9"
+`
+	require.NoError(t, os.WriteFile(confPath, []byte(conf), 0o600))
+
+	cfg := &config.DaemonConfig{}
+	cfg.Auth.Token = "test-token"
+	cfg.OpenVPN.DefaultBinary = "default"
+	cfg.OpenVPN.ConfDir = filepath.Join(dir, "conf")
+	cfg.OpenVPN.RuntimeDir = filepath.Join(dir, "run")
+
+	backend := ovpnbackend.NewMock()
+	cache := stats.NewCache()
+	rec := reconcile.New(store, backend, cache, reconcile.Config{
+		ConfDir: cfg.OpenVPN.ConfDir, RuntimeDir: cfg.OpenVPN.RuntimeDir, DefaultBinary: "default",
+	}, slog.Default())
+	srv := api.NewServer(store, backend, cache, rec, cfg, slog.Default())
+	router := srv.Router()
+	auth := func(req *http.Request) {
+		req.Header.Set("Authorization", "Bearer test-token")
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	// discover — always succeeds (list may be empty)
+	req := httptest.NewRequest(http.MethodGet, "/v1/instances/discover", nil)
+	auth(req)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	var cands []pkgapi.OpenVPNCandidate
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &cands))
+	// shape only; host may have no openvpn
+	require.NotNil(t, cands)
+
+	// adopt missing path
+	badBody, _ := json.Marshal(pkgapi.AdoptInstanceRequest{ConfPath: filepath.Join(dir, "nope.conf")})
+	req = httptest.NewRequest(http.MethodPost, "/v1/instances/adopt", bytes.NewReader(badBody))
+	auth(req)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusNotFound, rr.Code, rr.Body.String())
+
+	// adopt relative path rejected
+	relBody, _ := json.Marshal(pkgapi.AdoptInstanceRequest{ConfPath: "relative.conf"})
+	req = httptest.NewRequest(http.MethodPost, "/v1/instances/adopt", bytes.NewReader(relBody))
+	auth(req)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusBadRequest, rr.Code, rr.Body.String())
+
+	// adopt temp conf with take_over note
+	enabled := true
+	adoptBody, _ := json.Marshal(pkgapi.AdoptInstanceRequest{
+		ConfPath:   confPath,
+		Name:       "legacy",
+		Enabled:    &enabled,
+		BinaryName: "default",
+		TakeOver:   true,
+		PID:        99999,
+	})
+	req = httptest.NewRequest(http.MethodPost, "/v1/instances/adopt", bytes.NewReader(adoptBody))
+	auth(req)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
+	var adopted pkgapi.AdoptInstanceResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &adopted))
+	require.NotNil(t, adopted.Instance)
+	require.Equal(t, "legacy", adopted.Instance.Name)
+	require.Equal(t, "server", adopted.Instance.Role)
+	require.Equal(t, 1201, adopted.Instance.Port)
+	require.Equal(t, "10.77.0.0/24", adopted.Instance.ServerNetwork)
+	require.Equal(t, []string{"9.9.9.9"}, adopted.Instance.PushDNS)
+	require.Equal(t, confPath, adopted.ConfPath)
+	require.Equal(t, 99999, adopted.PID)
+	require.NotEmpty(t, adopted.Notes)
+	require.True(t, strings.Contains(strings.Join(adopted.Notes, " "), "take_over=true"))
+	require.Equal(t, "/etc/openvpn/server.crt", adopted.Instance.PKICertPath)
+
+	// route static path must not be treated as instance name
+	list, err := store.ListInstances(ctx)
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	require.Equal(t, "legacy", list[0].Name)
+}
+
+func TestInstanceMgmtAndStatus(t *testing.T) {
+	store, err := db.Open(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+
+	ctx := context.Background()
+	require.NoError(t, store.EnsureBinaryDefaults(ctx, map[string]string{
+		"default": "/usr/sbin/openvpn",
+	}))
+
+	cfg := &config.DaemonConfig{}
+	cfg.Auth.Token = "test-token"
+	cfg.OpenVPN.DefaultBinary = "default"
+	cfg.OpenVPN.ConfDir = "/tmp/openvpnd-mgmt-test/conf"
+	cfg.OpenVPN.RuntimeDir = "/tmp/openvpnd-mgmt-test/run"
+
+	backend := ovpnbackend.NewMock()
+	cache := stats.NewCache()
+	rec := reconcile.New(store, backend, cache, reconcile.Config{
+		ConfDir: cfg.OpenVPN.ConfDir, RuntimeDir: cfg.OpenVPN.RuntimeDir, DefaultBinary: "default",
+	}, slog.Default())
+	srv := api.NewServer(store, backend, cache, rec, cfg, slog.Default())
+	router := srv.Router()
+	auth := func(req *http.Request) {
+		req.Header.Set("Authorization", "Bearer test-token")
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	noIssue := false
+	body, _ := json.Marshal(pkgapi.InstanceCreateRequest{
+		Name: "ovpn0", Role: "server", ServerNetwork: "10.8.0.0/24",
+		Port: 1194, IssueServerCert: &noIssue, Enabled: boolPtr(true),
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/instances", bytes.NewReader(body))
+	auth(req)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
+
+	// ensure backend has live instance (create + reconcile should start enabled instance)
+	// inject connected clients for status
+	backend.SetClients("ovpn0", []ovpnbackend.LiveClient{{
+		CommonName: "alice", RealAddress: "1.2.3.4:5678", VirtualAddress: "10.8.0.2",
+		RxBytes: 1000, TxBytes: 2000,
+	}})
+
+	// GET status — structured live status
+	req = httptest.NewRequest(http.MethodGet, "/v1/instances/ovpn0/status", nil)
+	auth(req)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	var st pkgapi.InstanceStatus
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &st))
+	require.Equal(t, "ovpn0", st.Name)
+	require.True(t, st.Up)
+	require.Equal(t, 1, st.ConnectedClients)
+	require.Len(t, st.Clients, 1)
+	require.Equal(t, "alice", st.Clients[0].CommonName)
+	require.Equal(t, int64(1000), st.Clients[0].RxBytes)
+	require.Equal(t, int64(2000), st.TxBytes)
+
+	// POST mgmt status
+	mgmtBody, _ := json.Marshal(pkgapi.MgmtCommandRequest{Command: "status", Args: []string{"2"}})
+	req = httptest.NewRequest(http.MethodPost, "/v1/instances/ovpn0/mgmt", bytes.NewReader(mgmtBody))
+	auth(req)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	var mgmtResp pkgapi.MgmtCommandResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &mgmtResp))
+	require.Contains(t, mgmtResp.Output, "CLIENT_LIST")
+	require.Contains(t, mgmtResp.Output, "alice")
+
+	// kill client
+	killBody, _ := json.Marshal(pkgapi.MgmtCommandRequest{Command: "kill", Args: []string{"alice"}})
+	req = httptest.NewRequest(http.MethodPost, "/v1/instances/ovpn0/mgmt", bytes.NewReader(killBody))
+	auth(req)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &mgmtResp))
+	require.Contains(t, mgmtResp.Output, "SUCCESS")
+
+	// signal soft restart
+	sigBody, _ := json.Marshal(pkgapi.MgmtCommandRequest{Command: "signal", Args: []string{"SIGUSR1"}})
+	req = httptest.NewRequest(http.MethodPost, "/v1/instances/ovpn0/mgmt", bytes.NewReader(sigBody))
+	auth(req)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	// version / pid / hold / state
+	for _, cmd := range []string{"version", "pid", "hold", "state"} {
+		b, _ := json.Marshal(pkgapi.MgmtCommandRequest{Command: cmd})
+		req = httptest.NewRequest(http.MethodPost, "/v1/instances/ovpn0/mgmt", bytes.NewReader(b))
+		auth(req)
+		rr = httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code, "cmd=%s body=%s", cmd, rr.Body.String())
+	}
+
+	// reject unknown command
+	badBody, _ := json.Marshal(pkgapi.MgmtCommandRequest{Command: "exit"})
+	req = httptest.NewRequest(http.MethodPost, "/v1/instances/ovpn0/mgmt", bytes.NewReader(badBody))
+	auth(req)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusBadRequest, rr.Code, rr.Body.String())
+	require.Contains(t, rr.Body.String(), "not allowed")
+
+	// kill without args
+	noArg, _ := json.Marshal(pkgapi.MgmtCommandRequest{Command: "kill"})
+	req = httptest.NewRequest(http.MethodPost, "/v1/instances/ovpn0/mgmt", bytes.NewReader(noArg))
+	auth(req)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusBadRequest, rr.Code, rr.Body.String())
+
+	// bad signal
+	badSig, _ := json.Marshal(pkgapi.MgmtCommandRequest{Command: "signal", Args: []string{"SIGKILL"}})
+	req = httptest.NewRequest(http.MethodPost, "/v1/instances/ovpn0/mgmt", bytes.NewReader(badSig))
+	auth(req)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusBadRequest, rr.Code, rr.Body.String())
+
+	// missing instance
+	req = httptest.NewRequest(http.MethodGet, "/v1/instances/nope/status", nil)
+	auth(req)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusNotFound, rr.Code)
+
+	// down instance → mgmt conflict
+	req = httptest.NewRequest(http.MethodPost, "/v1/instances/ovpn0/down", nil)
+	auth(req)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	stillBody, _ := json.Marshal(pkgapi.MgmtCommandRequest{Command: "pid"})
+	req = httptest.NewRequest(http.MethodPost, "/v1/instances/ovpn0/mgmt", bytes.NewReader(stillBody))
+	auth(req)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusConflict, rr.Code, rr.Body.String())
+
+	// status when down still returns 200 with error field
+	req = httptest.NewRequest(http.MethodGet, "/v1/instances/ovpn0/status", nil)
+	auth(req)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &st))
+	require.False(t, st.Up)
+	require.NotEmpty(t, st.Error)
+}
+
+func boolPtr(v bool) *bool { return &v }

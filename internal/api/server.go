@@ -82,8 +82,10 @@ func (s *Server) Router() http.Handler {
 
 		r.Get("/instances", s.handleListInstances)
 		r.Post("/instances", s.handleCreateInstance)
-		// Static path before /instances/{name} so "import" is not captured as a name.
+		// Static paths before /instances/{name} so they are not captured as a name.
 		r.Post("/instances/import", s.handleImportInstance)
+		r.Post("/instances/adopt", s.handleAdoptInstance)
+		r.Get("/instances/discover", s.handleDiscoverOpenVPN)
 		r.Get("/instances/{name}", s.handleGetInstance)
 		r.Patch("/instances/{name}", s.handleUpdateInstance)
 		r.Delete("/instances/{name}", s.handleDeleteInstance)
@@ -91,6 +93,8 @@ func (s *Server) Router() http.Handler {
 		r.Post("/instances/{name}/down", s.handleInstanceDown)
 		r.Post("/instances/{name}/restart", s.handleInstanceRestart)
 		r.Get("/instances/{name}/export", s.handleInstanceExport)
+		r.Get("/instances/{name}/status", s.handleInstanceStatus)
+		r.Post("/instances/{name}/mgmt", s.handleInstanceMgmt)
 
 		r.Get("/instances/{name}/clients", s.handleListClients)
 		r.Post("/instances/{name}/clients", s.handleCreateClient)

@@ -120,7 +120,10 @@ This document is the source of truth for “is option X supported?” and for te
 | `mssfix` | `mssfix` | Done |
 | `verb_4` | `verb 4` | Done |
 | `fast_io` | `fast-io` | Done |
-| `udp_stuffing` | template comments (fork) | Done (template only) |
+| `udp_stuffing` | commented fork recipe + binary_name notes | Done (practical template) |
+| `udp_stuffing_env` | env `STUFFING_ENABLE=1` | Done |
+| `auth_script_template` | `script-security 2` + example auth-user-pass-verify | Done |
+| `tls_modern` | `tls-version-min 1.2` + `tls-groups X25519:P-256` | Done |
 | `comp_lzo_no` | `comp-lzo no` + push | Done |
 
 Custom presets: `POST /v1/features` — tested via features package merge.
@@ -162,10 +165,10 @@ https://github.com/reloadlife/openvpnd/issues?q=is%3Aissue+is%3Aopen+label%3Aroa
 
 | Area | Issue | Notes |
 |------|-------|--------|
-| Live adopt running openvpn | [#1](https://github.com/reloadlife/openvpnd/issues/1) | pid/socket discover |
+| Live adopt running openvpn | [#1](https://github.com/reloadlife/openvpnd/issues/1) | `/proc` discover + `POST /adopt` (take_over note; no force-stop v1) |
 | Inline PEM on conf import | [#2](https://github.com/reloadlife/openvpnd/issues/2) | materialize under pki_dir |
-| Full management API | [#3](https://github.com/reloadlife/openvpnd/issues/3) | kill, hold, status, logs |
-| Bandwidth enforcement | [#4](https://github.com/reloadlife/openvpnd/issues/4) | tc/nft/shaper |
+| Full management API | [#3](https://github.com/reloadlife/openvpnd/issues/3) | kill, hold, status, logs — API done (`POST …/mgmt`, `GET …/status`); TUI pending |
+| Bandwidth enforcement | [#4](https://github.com/reloadlife/openvpnd/issues/4) | Done: tc / shaper / log + traffic_limit suspend |
 | Full IPv6 pool UX | [#5](https://github.com/reloadlife/openvpnd/issues/5) | beyond `server-ipv6` string |
 | TAP / server-bridge | [#6](https://github.com/reloadlife/openvpnd/issues/6) | bridge mode |
 | auth-user-pass-verify / LDAP | [#7](https://github.com/reloadlife/openvpnd/issues/7) | server auth plugins |

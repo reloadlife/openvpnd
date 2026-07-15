@@ -14,16 +14,34 @@ func TestInstanceCreateFieldsRoleFilter(t *testing.T) {
 	// server-only
 	require.Contains(t, fieldKeys(f), "network")
 	require.Contains(t, fieldKeys(f), "public_endpoint")
+	require.Contains(t, fieldKeys(f), "max_clients")
+	require.Contains(t, fieldKeys(f), "tls_version_min")
+	require.Contains(t, fieldKeys(f), "tls_groups")
+	require.Contains(t, fieldKeys(f), "tls_cipher")
+	require.Contains(t, fieldKeys(f), "bridge_mode")
+	require.Contains(t, fieldKeys(f), "bridge_gateway")
+	require.Contains(t, fieldKeys(f), "auth_user_pass_verify")
+	require.Contains(t, fieldKeys(f), "script_security")
+	require.Contains(t, fieldKeys(f), "server_ipv6")
+	require.Contains(t, fieldKeys(f), "ifconfig_ipv6")
+	require.Contains(t, fieldKeys(f), "tun_mtu")
 	require.NotContains(t, fieldKeys(f), "remote")
 	require.NotContains(t, fieldKeys(f), "profile")
+	require.NotContains(t, fieldKeys(f), "auth_user_pass")
+	require.NotContains(t, fieldKeys(f), "auth_user_pass_file")
 
 	// switch role via rebuild
 	f.rebuild("client", f.Values())
 	keys := fieldKeys(f)
 	require.Contains(t, keys, "remote")
 	require.Contains(t, keys, "profile")
+	require.Contains(t, keys, "auth_user_pass")
+	require.Contains(t, keys, "auth_user_pass_file")
+	require.Contains(t, keys, "ifconfig_ipv6")
 	require.NotContains(t, keys, "network")
 	require.NotContains(t, keys, "issue_cert")
+	require.NotContains(t, keys, "max_clients")
+	require.NotContains(t, keys, "bridge_mode")
 }
 
 func TestClientCreateDefaultsFields(t *testing.T) {
@@ -45,6 +63,29 @@ func TestClientCreateDefaultsFields(t *testing.T) {
 	}
 	require.NotEmpty(t, cn.Tip)
 	require.Contains(t, fieldKeys(f), "iroutes")
+	require.Contains(t, fieldKeys(f), "push_dns")
+	require.Contains(t, fieldKeys(f), "push_domain")
+	require.Contains(t, fieldKeys(f), "redirect_gw")
+	require.Contains(t, fieldKeys(f), "disable_push")
+	require.Contains(t, fieldKeys(f), "bandwidth_rx")
+	require.Contains(t, fieldKeys(f), "bandwidth_tx")
+	require.Contains(t, fieldKeys(f), "traffic_limit")
+}
+
+func TestAdoptInstanceFields(t *testing.T) {
+	f := newForm("adopt", adoptInstanceFields(), map[string]string{
+		"conf_path": "/etc/openvpn/server.conf", "take_over": "y", "pid": "1234",
+	})
+	keys := fieldKeys(f)
+	require.Contains(t, keys, "conf_path")
+	require.Contains(t, keys, "name")
+	require.Contains(t, keys, "public_endpoint")
+	require.Contains(t, keys, "take_over")
+	require.Contains(t, keys, "pid")
+	v := f.Values()
+	require.Equal(t, "/etc/openvpn/server.conf", v["conf_path"])
+	require.Equal(t, "y", v["take_over"])
+	require.Equal(t, "1234", v["pid"])
 }
 
 func TestCAAndIssueCertFields(t *testing.T) {

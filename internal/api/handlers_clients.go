@@ -115,7 +115,9 @@ func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request) {
 
 	c, err := s.store.CreateClient(r.Context(), name, db.Client{
 		CommonName: cn, Name: display, Notes: req.Notes,
-		StaticIP: staticIP, PushRoutes: req.PushRoutes, IRoutes: req.IRoutes, Suspended: req.Suspended,
+		StaticIP: staticIP, PushRoutes: req.PushRoutes, IRoutes: req.IRoutes,
+		PushDNS: req.PushDNS, PushDomain: req.PushDomain, RedirectGateway: req.RedirectGateway,
+		DisablePush: req.DisablePush, Suspended: req.Suspended,
 		TrafficLimitBytes: req.TrafficLimitBytes, BandwidthRxBps: req.BandwidthRxBps, BandwidthTxBps: req.BandwidthTxBps,
 		CertRef: req.CertRef, ClientCertPath: req.ClientCertPath, ClientKeyPath: req.ClientKeyPath, Tags: req.Tags,
 	})
@@ -275,6 +277,18 @@ func (s *Server) handleUpdateClient(w http.ResponseWriter, r *http.Request) {
 	if req.IRoutes != nil {
 		c.IRoutes = req.IRoutes
 	}
+	if req.PushDNS != nil {
+		c.PushDNS = req.PushDNS
+	}
+	if req.PushDomain != nil {
+		c.PushDomain = *req.PushDomain
+	}
+	if req.RedirectGateway != nil {
+		c.RedirectGateway = *req.RedirectGateway
+	}
+	if req.DisablePush != nil {
+		c.DisablePush = req.DisablePush
+	}
 	if req.Suspended != nil {
 		c.Suspended = *req.Suspended
 	}
@@ -389,6 +403,8 @@ func (s *Server) toAPIClient(c db.Client) pkgapi.ServerClient {
 		ID: c.ID, InstanceID: c.InstanceID, InstanceName: c.InstanceName,
 		CommonName: c.CommonName, Name: c.Name, Notes: c.Notes,
 		StaticIP: c.StaticIP, PushRoutes: c.PushRoutes, IRoutes: c.IRoutes,
+		PushDNS: c.PushDNS, PushDomain: c.PushDomain, RedirectGateway: c.RedirectGateway,
+		DisablePush: c.DisablePush,
 		Suspended: c.Suspended, Connected: connected,
 		TrafficLimitBytes: c.TrafficLimitBytes, BandwidthRxBps: c.BandwidthRxBps, BandwidthTxBps: c.BandwidthTxBps,
 		CertRef: c.CertRef, ClientCertPath: c.ClientCertPath, ClientKeyPath: c.ClientKeyPath,

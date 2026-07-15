@@ -56,6 +56,9 @@ type Result struct {
 	ServerIPv6      string   `json:"server_ipv6,omitempty"`
 	Plugins         []Plugin `json:"plugins,omitempty"`
 	Warnings        []string `json:"warnings,omitempty"`
+	// Inline holds extracted PEM bodies from <tag> blocks, pending Materialize.
+	// Not serialized; stripped from ExtraDirectives by Parse.
+	Inline map[string]string `json:"-"`
 }
 
 // Directives openvpnd injects / owns — ignored on import.
@@ -85,10 +88,17 @@ func Parse(content string) (Result, error) {
 	var r Result
 	r.AuthMode = "pki"
 
-	// Strip inline PEM/XML blocks; warn if present (file refs only for adopt).
-	body, inlines := stripInlineBlocks(content)
-	for tag := range inlines {
-		r.Warnings = append(r.Warnings, fmt.Sprintf("inline <%s> block ignored; use file path directives or extract material first", tag))
+	// Strip inline PEM/XML blocks out of the body so they never land in ExtraDirectives.
+	// Bodies are kept on Result.Inline for Materialize (API create import / TUI).
+	inlines, body := ExtractInlineBlocks(content)
+	if len(inlines) > 0 {
+		r.Inline = inlines
+		// Stable warning order by InlineTags list.
+		for _, tag := range InlineTags {
+			if _, ok := inlines[tag]; ok {
+				r.Warnings = append(r.Warnings, inlineWarning(tag))
+			}
+		}
 	}
 
 	var extra []string
@@ -641,29 +651,3 @@ func indexUnquoted(s string, ch byte) int {
 	return -1
 }
 
-var inlineTags = []string{"ca", "cert", "key", "tls-crypt", "tls-auth", "secret", "dh", "extra-certs", "tls-crypt-v2"}
-
-func stripInlineBlocks(content string) (body string, blocks map[string]string) {
-	blocks = map[string]string{}
-	body = content
-	for _, tag := range inlineTags {
-		open := "<" + tag + ">"
-		closeT := "</" + tag + ">"
-		for {
-			low := strings.ToLower(body)
-			i := strings.Index(low, open)
-			if i < 0 {
-				break
-			}
-			j := strings.Index(low[i+len(open):], closeT)
-			if j < 0 {
-				break
-			}
-			start := i + len(open)
-			end := i + len(open) + j
-			blocks[tag] = strings.TrimSpace(body[start:end]) + "\n"
-			body = body[:i] + "\n" + body[end+len(closeT):]
-		}
-	}
-	return body, blocks
-}

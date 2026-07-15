@@ -18,6 +18,9 @@ static_key_path, extra_directives,
 plugins, env_vars, feature_sets,
 pre_up, post_up, pre_down, post_down,
 max_clients, tls_version_min, tun_mtu, sndbuf, rcvbuf, server_ipv6, auth_user_pass,
+bridge_mode, bridge_gateway, bridge_pool_start, bridge_pool_end, bridge_netmask,
+tls_cipher, tls_ciphersuites, tls_groups, tls_cert_profile,
+auth_user_pass_verify, script_security, username_as_common_name, auth_user_pass_file, ifconfig_ipv6,
 conf_hash, pid, last_error,
 last_rx_bytes, last_tx_bytes, last_rx_bps, last_tx_bps, connected_clients,
 public_endpoint,
@@ -27,7 +30,7 @@ func scanInstance(scanner interface {
 	Scan(dest ...any) error
 }) (Instance, error) {
 	var i Instance
-	var enabled, redirect, authUserPass int
+	var enabled, redirect, authUserPass, bridgeMode, usernameAsCN int
 	var remotes, pushRoutes, pushDNS string
 	var plugins, envVars, featureSets string
 	var created, updated string
@@ -42,6 +45,9 @@ func scanInstance(scanner interface {
 		&plugins, &envVars, &featureSets,
 		&i.PreUp, &i.PostUp, &i.PreDown, &i.PostDown,
 		&i.MaxClients, &i.TLSVersionMin, &i.TunMTU, &i.Sndbuf, &i.Rcvbuf, &i.ServerIPv6, &authUserPass,
+		&bridgeMode, &i.BridgeGateway, &i.BridgePoolStart, &i.BridgePoolEnd, &i.BridgeNetmask,
+		&i.TLSCipher, &i.TLSCiphersuites, &i.TLSGroups, &i.TLSCertProfile,
+		&i.AuthUserPassVerify, &i.ScriptSecurity, &usernameAsCN, &i.AuthUserPassFile, &i.IfconfigIPv6,
 		&i.ConfHash, &i.PID, &i.LastError,
 		&i.LastRxBytes, &i.LastTxBytes, &i.LastRxBps, &i.LastTxBps, &i.ConnectedClients,
 		&i.PublicEndpoint,
@@ -53,6 +59,8 @@ func scanInstance(scanner interface {
 	i.Enabled = enabled != 0
 	i.RedirectGateway = redirect != 0
 	i.AuthUserPass = authUserPass != 0
+	i.BridgeMode = bridgeMode != 0
+	i.UsernameAsCommonName = usernameAsCN != 0
 	i.Remotes = decodeRemotes(remotes)
 	i.PushRoutes = decodeJSONList(pushRoutes)
 	i.PushDNS = decodeJSONList(pushDNS)
@@ -105,6 +113,9 @@ INSERT INTO instances (
   plugins, env_vars, feature_sets,
   pre_up, post_up, pre_down, post_down,
   max_clients, tls_version_min, tun_mtu, sndbuf, rcvbuf, server_ipv6, auth_user_pass,
+  bridge_mode, bridge_gateway, bridge_pool_start, bridge_pool_end, bridge_netmask,
+  tls_cipher, tls_ciphersuites, tls_groups, tls_cert_profile,
+  auth_user_pass_verify, script_security, username_as_common_name, auth_user_pass_file, ifconfig_ipv6,
   conf_hash, pid, last_error,
   last_rx_bytes, last_tx_bytes, last_rx_bps, last_tx_bps, connected_clients,
   public_endpoint,
@@ -112,7 +123,10 @@ INSERT INTO instances (
 ) VALUES (
   ?,?,?,?,?, ?,?,?,?,?,?, ?,?,?,?,?, ?,?,?, ?,?,?,?,
   ?,?,?,?,?,?, ?,?, ?,?,?, ?,?,?,?,
-  ?,?,?,?,?,?, ?,
+  ?,?,?,?,?,?,?,
+  ?,?,?,?,?,
+  ?,?,?,?,
+  ?,?,?,?,?,
   '', 0, '', 0,0,0,0,0, ?, ?,?
 )`,
 		i.Name, i.Role, boolToInt(i.Enabled), i.BinaryName, i.BinaryPath,
@@ -125,6 +139,9 @@ INSERT INTO instances (
 		encodePlugins(i.Plugins), encodeEnvVars(i.EnvVars), encodeJSONList(i.FeatureSets),
 		i.PreUp, i.PostUp, i.PreDown, i.PostDown,
 		i.MaxClients, i.TLSVersionMin, i.TunMTU, i.Sndbuf, i.Rcvbuf, i.ServerIPv6, boolToInt(i.AuthUserPass),
+		boolToInt(i.BridgeMode), i.BridgeGateway, i.BridgePoolStart, i.BridgePoolEnd, i.BridgeNetmask,
+		i.TLSCipher, i.TLSCiphersuites, i.TLSGroups, i.TLSCertProfile,
+		i.AuthUserPassVerify, i.ScriptSecurity, boolToInt(i.UsernameAsCommonName), i.AuthUserPassFile, i.IfconfigIPv6,
 		i.PublicEndpoint,
 		now, now,
 	)
@@ -206,6 +223,9 @@ UPDATE instances SET
   plugins=?, env_vars=?, feature_sets=?,
   pre_up=?, post_up=?, pre_down=?, post_down=?,
   max_clients=?, tls_version_min=?, tun_mtu=?, sndbuf=?, rcvbuf=?, server_ipv6=?, auth_user_pass=?,
+  bridge_mode=?, bridge_gateway=?, bridge_pool_start=?, bridge_pool_end=?, bridge_netmask=?,
+  tls_cipher=?, tls_ciphersuites=?, tls_groups=?, tls_cert_profile=?,
+  auth_user_pass_verify=?, script_security=?, username_as_common_name=?, auth_user_pass_file=?, ifconfig_ipv6=?,
   conf_hash=?, public_endpoint=?, updated_at=?
 WHERE name=?`,
 		i.Role, boolToInt(i.Enabled), i.BinaryName, i.BinaryPath,
@@ -218,6 +238,9 @@ WHERE name=?`,
 		encodePlugins(i.Plugins), encodeEnvVars(i.EnvVars), encodeJSONList(i.FeatureSets),
 		i.PreUp, i.PostUp, i.PreDown, i.PostDown,
 		i.MaxClients, i.TLSVersionMin, i.TunMTU, i.Sndbuf, i.Rcvbuf, i.ServerIPv6, boolToInt(i.AuthUserPass),
+		boolToInt(i.BridgeMode), i.BridgeGateway, i.BridgePoolStart, i.BridgePoolEnd, i.BridgeNetmask,
+		i.TLSCipher, i.TLSCiphersuites, i.TLSGroups, i.TLSCertProfile,
+		i.AuthUserPassVerify, i.ScriptSecurity, boolToInt(i.UsernameAsCommonName), i.AuthUserPassFile, i.IfconfigIPv6,
 		i.ConfHash, i.PublicEndpoint, now, i.Name,
 	)
 	if err != nil {

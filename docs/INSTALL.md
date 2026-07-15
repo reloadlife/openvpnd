@@ -26,6 +26,42 @@ make build
 sudo ./scripts/install-local.sh
 ```
 
+## Self-update from GitHub Releases
+
+Both binaries can refresh themselves from published release assets:
+
+```bash
+# Check only (no download)
+openvpnd update --check
+openvpnctl update --check
+
+# Install latest release for this OS/arch into the current executable path
+sudo openvpnd update
+# or pin a tag / fork:
+sudo openvpnd update --version v0.2.0
+sudo openvpnd update --repo reloadlife/openvpnd
+
+# openvpnctl uses the same flags
+sudo openvpnctl update --check
+sudo openvpnctl update
+```
+
+Behavior:
+
+1. Resolves `https://api.github.com/repos/{repo}/releases/latest` (or `/tags/vX.Y.Z`)
+2. Prefers `openvpnd_VERSION_linux_{amd64|arm64}.tar.gz`; falls back to bare `openvpnd` / `openvpnctl` assets
+3. Verifies `SHA256SUMS` when the release includes it
+4. Atomically replaces the running binary path (`os.Executable`), and updates the sibling (`openvpnd`/`openvpnctl`) in the same directory when that file already exists and is in the archive
+5. Prints `systemctl restart openvpnd` instructions (does **not** restart automatically)
+
+```bash
+sudo systemctl restart openvpnd
+openvpnd version
+openvpnctl version
+```
+
+Requires write access to the install directory (typically `sudo` for `/usr/local/bin`).
+
 ## After install
 
 ```bash

@@ -11,6 +11,7 @@ import (
 
 	"github.com/reloadlife/openvpnd/internal/config"
 	"github.com/reloadlife/openvpnd/internal/daemon"
+	"github.com/reloadlife/openvpnd/internal/update"
 	"github.com/reloadlife/openvpnd/internal/version"
 )
 
@@ -19,7 +20,7 @@ func main() {
 		Use:   "openvpnd",
 		Short: "OpenVPN management daemon",
 	}
-	root.AddCommand(versionCmd(), runCmd())
+	root.AddCommand(versionCmd(), runCmd(), updateCmd())
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
@@ -51,6 +52,34 @@ func runCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&configPath, "config", "", "path to config file")
+	return cmd
+}
+
+func updateCmd() *cobra.Command {
+	var check bool
+	var ver string
+	var repo string
+	cmd := &cobra.Command{
+		Use:   "update",
+		Short: "Update openvpnd from GitHub Releases",
+		Long: `Download a release from GitHub, verify SHA256SUMS when present, and
+atomically replace this executable (and openvpnctl in the same directory).
+
+After updating a systemd-managed daemon:
+
+  sudo systemctl restart openvpnd`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return update.Run(cmd.Context(), update.Options{
+				Repo:           repo,
+				Version:        ver,
+				CurrentVersion: version.Version,
+				BinaryName:     "openvpnd",
+			}, check)
+		},
+	}
+	cmd.Flags().BoolVar(&check, "check", false, "only check whether a newer version is available")
+	cmd.Flags().StringVar(&ver, "version", "", "install specific tag (e.g. v0.2.0); default latest")
+	cmd.Flags().StringVar(&repo, "repo", update.DefaultRepo, "GitHub repository owner/name")
 	return cmd
 }
 

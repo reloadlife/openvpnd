@@ -109,6 +109,29 @@ type InstanceCreateRequest struct {
 	PostDown       string   `json:"post_down,omitempty"`
 	PublicEndpoint string   `json:"public_endpoint,omitempty"` // host or host:port for client profiles
 
+	// Advanced knobs (migrations 00005/00006)
+	MaxClients           int    `json:"max_clients,omitempty"`
+	TLSVersionMin        string `json:"tls_version_min,omitempty"`
+	TunMTU               int    `json:"tun_mtu,omitempty"`
+	Sndbuf               int    `json:"sndbuf,omitempty"`
+	Rcvbuf               int    `json:"rcvbuf,omitempty"`
+	ServerIPv6           string `json:"server_ipv6,omitempty"`
+	AuthUserPass         bool   `json:"auth_user_pass,omitempty"`
+	BridgeMode           bool   `json:"bridge_mode,omitempty"`
+	BridgeGateway        string `json:"bridge_gateway,omitempty"`
+	BridgePoolStart      string `json:"bridge_pool_start,omitempty"`
+	BridgePoolEnd        string `json:"bridge_pool_end,omitempty"`
+	BridgeNetmask        string `json:"bridge_netmask,omitempty"`
+	TLSCipher            string `json:"tls_cipher,omitempty"`
+	TLSCiphersuites      string `json:"tls_ciphersuites,omitempty"`
+	TLSGroups            string `json:"tls_groups,omitempty"`
+	TLSCertProfile       string `json:"tls_cert_profile,omitempty"`
+	AuthUserPassVerify   string `json:"auth_user_pass_verify,omitempty"`
+	ScriptSecurity       int    `json:"script_security,omitempty"`
+	UsernameAsCommonName bool   `json:"username_as_common_name,omitempty"`
+	AuthUserPassFile     string `json:"auth_user_pass_file,omitempty"`
+	IfconfigIPv6         string `json:"ifconfig_ipv6,omitempty"`
+
 	// Automation (server mTLS)
 	IssueServerCert  *bool  `json:"issue_server_cert,omitempty"`  // default true when cert paths empty + CA available
 	GenerateTLSCrypt *bool  `json:"generate_tls_crypt,omitempty"` // default true when issuing
@@ -171,6 +194,41 @@ type ImportInstanceResponse struct {
 	Created    bool                  `json:"created"`
 }
 
+// AdoptInstanceRequest registers an on-disk OpenVPN conf as a managed instance.
+//
+// Unlike import (which takes conf content in the body), adopt reads conf_path
+// from the daemon host filesystem. take_over documents that the existing
+// process should be stopped/restarted under openvpnd (v1 does not force-stop).
+type AdoptInstanceRequest struct {
+	ConfPath       string `json:"conf_path"`
+	Name           string `json:"name,omitempty"`
+	Enabled        *bool  `json:"enabled,omitempty"`
+	BinaryName     string `json:"binary_name,omitempty"`
+	TakeOver       bool   `json:"take_over,omitempty"`
+	PublicEndpoint string `json:"public_endpoint,omitempty"`
+	// PID is optional operator context (e.g. from discover); stored in notes only.
+	PID int `json:"pid,omitempty"`
+}
+
+// AdoptInstanceResponse is the create result from adopt.
+type AdoptInstanceResponse struct {
+	Instance   *Instance             `json:"instance,omitempty"`
+	Parsed     InstanceCreateRequest `json:"parsed"`
+	Warnings   []string              `json:"warnings,omitempty"`
+	AutoFilled []string              `json:"auto_filled,omitempty"`
+	Notes      []string              `json:"notes,omitempty"`
+	ConfPath   string                `json:"conf_path"`
+	PID        int                   `json:"pid,omitempty"`
+}
+
+// OpenVPNCandidate is a running openvpn process discovered on the daemon host.
+type OpenVPNCandidate struct {
+	PID      int    `json:"pid"`
+	ConfPath string `json:"conf_path,omitempty"`
+	Cmdline  string `json:"cmdline"`
+	Binary   string `json:"binary"`
+}
+
 // InstanceUpdateRequest patches an instance.
 type InstanceUpdateRequest struct {
 	Enabled         *bool    `json:"enabled,omitempty"`
@@ -209,67 +267,141 @@ type InstanceUpdateRequest struct {
 	PreDown         *string  `json:"pre_down,omitempty"`
 	PostDown        *string  `json:"post_down,omitempty"`
 	PublicEndpoint  *string  `json:"public_endpoint,omitempty"`
+
+	MaxClients           *int    `json:"max_clients,omitempty"`
+	TLSVersionMin        *string `json:"tls_version_min,omitempty"`
+	TunMTU               *int    `json:"tun_mtu,omitempty"`
+	Sndbuf               *int    `json:"sndbuf,omitempty"`
+	Rcvbuf               *int    `json:"rcvbuf,omitempty"`
+	ServerIPv6           *string `json:"server_ipv6,omitempty"`
+	AuthUserPass         *bool   `json:"auth_user_pass,omitempty"`
+	BridgeMode           *bool   `json:"bridge_mode,omitempty"`
+	BridgeGateway        *string `json:"bridge_gateway,omitempty"`
+	BridgePoolStart      *string `json:"bridge_pool_start,omitempty"`
+	BridgePoolEnd        *string `json:"bridge_pool_end,omitempty"`
+	BridgeNetmask        *string `json:"bridge_netmask,omitempty"`
+	TLSCipher            *string `json:"tls_cipher,omitempty"`
+	TLSCiphersuites      *string `json:"tls_ciphersuites,omitempty"`
+	TLSGroups            *string `json:"tls_groups,omitempty"`
+	TLSCertProfile       *string `json:"tls_cert_profile,omitempty"`
+	AuthUserPassVerify   *string `json:"auth_user_pass_verify,omitempty"`
+	ScriptSecurity       *int    `json:"script_security,omitempty"`
+	UsernameAsCommonName *bool   `json:"username_as_common_name,omitempty"`
+	AuthUserPassFile     *string `json:"auth_user_pass_file,omitempty"`
+	IfconfigIPv6         *string `json:"ifconfig_ipv6,omitempty"`
+}
+
+// MgmtCommandRequest is a whitelisted OpenVPN management interface command.
+//
+// Allowed commands: status, kill, signal, hold, log, state, bytecount, pid, version.
+// kill requires args[0] (CN or IP:port). signal requires args[0] (e.g. SIGUSR1, SIGHUP, SIGTERM).
+type MgmtCommandRequest struct {
+	Command string   `json:"command"`
+	Args    []string `json:"args,omitempty"`
+}
+
+// MgmtCommandResponse is the raw management interface reply body.
+type MgmtCommandResponse struct {
+	Output string `json:"output"`
+}
+
+// InstanceStatus is live process/client status from the management interface (when up).
+type InstanceStatus struct {
+	Name             string                 `json:"name"`
+	Up               bool                   `json:"up"`
+	PID              int                    `json:"pid,omitempty"`
+	RxBytes          int64                  `json:"rx_bytes"`
+	TxBytes          int64                  `json:"tx_bytes"`
+	ConnectedClients int                    `json:"connected_clients"`
+	Clients          []InstanceStatusClient `json:"clients,omitempty"`
+	UpdatedAt        time.Time              `json:"updated_at,omitempty"`
+	// Error is set when the instance exists but management is unreachable / not running.
+	Error string `json:"error,omitempty"`
+}
+
+// InstanceStatusClient is one connected peer from management status.
+type InstanceStatusClient struct {
+	CommonName     string    `json:"common_name"`
+	RealAddress    string    `json:"real_address,omitempty"`
+	VirtualAddress string    `json:"virtual_address,omitempty"`
+	ConnectedSince time.Time `json:"connected_since,omitempty"`
+	RxBytes        int64     `json:"rx_bytes"`
+	TxBytes        int64     `json:"tx_bytes"`
 }
 
 // Instance is the API representation.
 type Instance struct {
-	ID               int64     `json:"id"`
-	Name             string    `json:"name"`
-	Role             string    `json:"role"`
-	Enabled          bool      `json:"enabled"`
-	Up               bool      `json:"up"`
-	BinaryName       string    `json:"binary_name"`
-	BinaryPath       string    `json:"binary_path,omitempty"`
-	DevType          string    `json:"dev_type"`
-	Device           string    `json:"device,omitempty"`
-	Proto            string    `json:"proto"`
-	LocalBind        string    `json:"local_bind,omitempty"`
-	Port             int       `json:"port"`
-	Remotes          []Remote  `json:"remotes,omitempty"`
-	ServerNetwork    string    `json:"server_network,omitempty"`
-	Topology         string    `json:"topology,omitempty"`
-	PoolStart        string    `json:"pool_start,omitempty"`
-	PoolEnd          string    `json:"pool_end,omitempty"`
-	AuthMode         string    `json:"auth_mode"`
-	Cipher           string    `json:"cipher,omitempty"`
-	DataCiphers      string    `json:"data_ciphers,omitempty"`
-	AuthDigest       string    `json:"auth_digest,omitempty"`
-	PushRoutes       []string  `json:"push_routes,omitempty"`
-	PushDNS          []string  `json:"push_dns,omitempty"`
-	PushDomain       string    `json:"push_domain,omitempty"`
-	RedirectGateway  bool      `json:"redirect_gateway"`
-	PKICaPath        string    `json:"pki_ca_path,omitempty"`
-	PKICertPath      string    `json:"pki_cert_path,omitempty"`
-	PKIKeyPath       string    `json:"pki_key_path,omitempty"`
-	PKITLSCryptPath  string    `json:"pki_tls_crypt_path,omitempty"`
-	PKIDHPath        string    `json:"pki_dh_path,omitempty"`
-	PKICRLPath       string    `json:"pki_crl_path,omitempty"`
-	StaticKeyPath    string    `json:"static_key_path,omitempty"`
-	ExtraDirectives  string    `json:"extra_directives,omitempty"`
-	Plugins          []Plugin  `json:"plugins,omitempty"`
-	EnvVars          []EnvVar  `json:"env_vars,omitempty"`
-	FeatureSets      []string  `json:"feature_sets,omitempty"`
-	PreUp            string    `json:"pre_up,omitempty"`
-	PostUp           string    `json:"post_up,omitempty"`
-	PreDown          string    `json:"pre_down,omitempty"`
-	PostDown         string    `json:"post_down,omitempty"`
-	MaxClients       int       `json:"max_clients,omitempty"`
-	TLSVersionMin    string    `json:"tls_version_min,omitempty"`
-	TunMTU           int       `json:"tun_mtu,omitempty"`
-	Sndbuf           int       `json:"sndbuf,omitempty"`
-	Rcvbuf           int       `json:"rcvbuf,omitempty"`
-	ServerIPv6       string    `json:"server_ipv6,omitempty"`
-	AuthUserPass     bool      `json:"auth_user_pass,omitempty"`
-	PublicEndpoint   string    `json:"public_endpoint,omitempty"`
-	PID              int       `json:"pid,omitempty"`
-	LastError        string    `json:"last_error,omitempty"`
-	ConnectedClients int       `json:"connected_clients"`
-	RxBytes          int64     `json:"rx_bytes"`
-	TxBytes          int64     `json:"tx_bytes"`
-	RxBps            float64   `json:"rx_bps"`
-	TxBps            float64   `json:"tx_bps"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID                   int64     `json:"id"`
+	Name                 string    `json:"name"`
+	Role                 string    `json:"role"`
+	Enabled              bool      `json:"enabled"`
+	Up                   bool      `json:"up"`
+	BinaryName           string    `json:"binary_name"`
+	BinaryPath           string    `json:"binary_path,omitempty"`
+	DevType              string    `json:"dev_type"`
+	Device               string    `json:"device,omitempty"`
+	Proto                string    `json:"proto"`
+	LocalBind            string    `json:"local_bind,omitempty"`
+	Port                 int       `json:"port"`
+	Remotes              []Remote  `json:"remotes,omitempty"`
+	ServerNetwork        string    `json:"server_network,omitempty"`
+	Topology             string    `json:"topology,omitempty"`
+	PoolStart            string    `json:"pool_start,omitempty"`
+	PoolEnd              string    `json:"pool_end,omitempty"`
+	AuthMode             string    `json:"auth_mode"`
+	Cipher               string    `json:"cipher,omitempty"`
+	DataCiphers          string    `json:"data_ciphers,omitempty"`
+	AuthDigest           string    `json:"auth_digest,omitempty"`
+	PushRoutes           []string  `json:"push_routes,omitempty"`
+	PushDNS              []string  `json:"push_dns,omitempty"`
+	PushDomain           string    `json:"push_domain,omitempty"`
+	RedirectGateway      bool      `json:"redirect_gateway"`
+	PKICaPath            string    `json:"pki_ca_path,omitempty"`
+	PKICertPath          string    `json:"pki_cert_path,omitempty"`
+	PKIKeyPath           string    `json:"pki_key_path,omitempty"`
+	PKITLSCryptPath      string    `json:"pki_tls_crypt_path,omitempty"`
+	PKIDHPath            string    `json:"pki_dh_path,omitempty"`
+	PKICRLPath           string    `json:"pki_crl_path,omitempty"`
+	StaticKeyPath        string    `json:"static_key_path,omitempty"`
+	ExtraDirectives      string    `json:"extra_directives,omitempty"`
+	Plugins              []Plugin  `json:"plugins,omitempty"`
+	EnvVars              []EnvVar  `json:"env_vars,omitempty"`
+	FeatureSets          []string  `json:"feature_sets,omitempty"`
+	PreUp                string    `json:"pre_up,omitempty"`
+	PostUp               string    `json:"post_up,omitempty"`
+	PreDown              string    `json:"pre_down,omitempty"`
+	PostDown             string    `json:"post_down,omitempty"`
+	MaxClients           int       `json:"max_clients,omitempty"`
+	TLSVersionMin        string    `json:"tls_version_min,omitempty"`
+	TunMTU               int       `json:"tun_mtu,omitempty"`
+	Sndbuf               int       `json:"sndbuf,omitempty"`
+	Rcvbuf               int       `json:"rcvbuf,omitempty"`
+	ServerIPv6           string    `json:"server_ipv6,omitempty"`
+	AuthUserPass         bool      `json:"auth_user_pass,omitempty"`
+	BridgeMode           bool      `json:"bridge_mode,omitempty"`
+	BridgeGateway        string    `json:"bridge_gateway,omitempty"`
+	BridgePoolStart      string    `json:"bridge_pool_start,omitempty"`
+	BridgePoolEnd        string    `json:"bridge_pool_end,omitempty"`
+	BridgeNetmask        string    `json:"bridge_netmask,omitempty"`
+	TLSCipher            string    `json:"tls_cipher,omitempty"`
+	TLSCiphersuites      string    `json:"tls_ciphersuites,omitempty"`
+	TLSGroups            string    `json:"tls_groups,omitempty"`
+	TLSCertProfile       string    `json:"tls_cert_profile,omitempty"`
+	AuthUserPassVerify   string    `json:"auth_user_pass_verify,omitempty"`
+	ScriptSecurity       int       `json:"script_security,omitempty"`
+	UsernameAsCommonName bool      `json:"username_as_common_name,omitempty"`
+	AuthUserPassFile     string    `json:"auth_user_pass_file,omitempty"`
+	IfconfigIPv6         string    `json:"ifconfig_ipv6,omitempty"`
+	PublicEndpoint       string    `json:"public_endpoint,omitempty"`
+	PID                  int       `json:"pid,omitempty"`
+	LastError            string    `json:"last_error,omitempty"`
+	ConnectedClients     int       `json:"connected_clients"`
+	RxBytes              int64     `json:"rx_bytes"`
+	TxBytes              int64     `json:"tx_bytes"`
+	RxBps                float64   `json:"rx_bps"`
+	TxBps                float64   `json:"tx_bps"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
 }
 
 // ClientCreateRequest creates a server client (VPN user).
@@ -284,6 +416,10 @@ type ClientCreateRequest struct {
 	StaticIP          string   `json:"static_ip,omitempty"` // empty/auto → allocate
 	PushRoutes        []string `json:"push_routes,omitempty"`
 	IRoutes           []string `json:"iroutes,omitempty"` // subnets behind client (CCD iroute)
+	PushDNS           []string `json:"push_dns,omitempty"`
+	PushDomain        string   `json:"push_domain,omitempty"`
+	RedirectGateway   bool     `json:"redirect_gateway,omitempty"`
+	DisablePush       []string `json:"disable_push,omitempty"`
 	Suspended         bool     `json:"suspended,omitempty"`
 	TrafficLimitBytes int64    `json:"traffic_limit_bytes,omitempty"`
 	BandwidthRxBps    int64    `json:"bandwidth_rx_bps,omitempty"`
@@ -317,6 +453,10 @@ type ClientUpdateRequest struct {
 	StaticIP          *string  `json:"static_ip,omitempty"`
 	PushRoutes        []string `json:"push_routes,omitempty"`
 	IRoutes           []string `json:"iroutes,omitempty"`
+	PushDNS           []string `json:"push_dns,omitempty"`
+	PushDomain        *string  `json:"push_domain,omitempty"`
+	RedirectGateway   *bool    `json:"redirect_gateway,omitempty"`
+	DisablePush       []string `json:"disable_push,omitempty"`
 	Suspended         *bool    `json:"suspended,omitempty"`
 	TrafficLimitBytes *int64   `json:"traffic_limit_bytes,omitempty"`
 	BandwidthRxBps    *int64   `json:"bandwidth_rx_bps,omitempty"`
@@ -338,6 +478,10 @@ type ServerClient struct {
 	StaticIP          string    `json:"static_ip,omitempty"`
 	PushRoutes        []string  `json:"push_routes,omitempty"`
 	IRoutes           []string  `json:"iroutes,omitempty"`
+	PushDNS           []string  `json:"push_dns,omitempty"`
+	PushDomain        string    `json:"push_domain,omitempty"`
+	RedirectGateway   bool      `json:"redirect_gateway,omitempty"`
+	DisablePush       []string  `json:"disable_push,omitempty"`
 	Suspended         bool      `json:"suspended"`
 	Connected         bool      `json:"connected"`
 	TrafficLimitBytes int64     `json:"traffic_limit_bytes"`

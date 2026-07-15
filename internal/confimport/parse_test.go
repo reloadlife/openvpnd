@@ -1,6 +1,8 @@
 package confimport_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -144,6 +146,127 @@ CA
 	require.Equal(t, "client", r.Role)
 	require.NotEmpty(t, r.Warnings)
 	require.Contains(t, r.Warnings[0], "inline <ca>")
+	require.True(t, r.HasInline())
+	require.Contains(t, r.Inline, "ca")
+	// Inline PEMs must not leak into extra directives.
+	require.NotContains(t, r.ExtraDirectives, "BEGIN CERTIFICATE")
+	require.NotContains(t, r.ExtraDirectives, "<ca>")
+}
+
+const inlineClientFixture = `
+client
+dev tun
+proto udp
+remote vpn.example.com 1194
+cipher AES-256-GCM
+auth SHA256
+<ca>
+-----BEGIN CERTIFICATE-----
+CA_BODY
+-----END CERTIFICATE-----
+</ca>
+<cert>
+-----BEGIN CERTIFICATE-----
+CERT_BODY
+-----END CERTIFICATE-----
+</cert>
+<key>
+-----BEGIN PRIVATE KEY-----
+KEY_BODY
+-----END PRIVATE KEY-----
+</key>
+<tls-crypt>
+-----BEGIN OpenVPN Static key V1-----
+TC_BODY
+-----END OpenVPN Static key V1-----
+</tls-crypt>
+explicit-exit-notify 1
+`
+
+func TestMaterializeInlinePEMs(t *testing.T) {
+	r, err := confimport.Parse(inlineClientFixture)
+	require.NoError(t, err)
+	require.Equal(t, "client", r.Role)
+	require.True(t, r.HasInline())
+	require.NotEmpty(t, r.Warnings)
+	require.Empty(t, r.PKICaPath)
+	require.NotContains(t, r.ExtraDirectives, "BEGIN CERTIFICATE")
+	require.Contains(t, r.ExtraDirectives, "explicit-exit-notify")
+
+	dir := t.TempDir()
+	err = r.Materialize(confimport.MaterializeOptions{DestDir: dir})
+	require.NoError(t, err)
+	require.False(t, r.HasInline())
+	// Inline warnings cleared after successful materialize.
+	for _, w := range r.Warnings {
+		require.NotContains(t, w, "inline <")
+	}
+	require.FileExists(t, r.PKICaPath)
+	require.FileExists(t, r.PKICertPath)
+	require.FileExists(t, r.PKIKeyPath)
+	require.FileExists(t, r.TLSCryptPath)
+	require.Equal(t, filepath.Join(dir, "ca.crt"), r.PKICaPath)
+	require.Equal(t, filepath.Join(dir, "client.crt"), r.PKICertPath)
+	require.Equal(t, filepath.Join(dir, "client.key"), r.PKIKeyPath)
+	require.Equal(t, filepath.Join(dir, "tls-crypt.key"), r.TLSCryptPath)
+
+	caPEM, err := os.ReadFile(r.PKICaPath)
+	require.NoError(t, err)
+	require.Contains(t, string(caPEM), "CA_BODY")
+
+	// ToCreateRequest carries absolute paths and disables auto-issue.
+	req := r.ToCreateRequest()
+	require.Equal(t, r.PKICaPath, req.PKICaPath)
+	require.Equal(t, r.PKICertPath, req.PKICertPath)
+	require.Equal(t, r.PKIKeyPath, req.PKIKeyPath)
+	require.Equal(t, r.TLSCryptPath, req.PKITLSCryptPath)
+	require.NotNil(t, req.IssueServerCert)
+	require.False(t, *req.IssueServerCert)
+}
+
+func TestMaterializeServerRoleNames(t *testing.T) {
+	content := `
+port 1194
+proto udp
+dev tun
+server 10.8.0.0 255.255.255.0
+<ca>
+-----BEGIN CERTIFICATE-----
+CA
+-----END CERTIFICATE-----
+</ca>
+<cert>
+-----BEGIN CERTIFICATE-----
+CERT
+-----END CERTIFICATE-----
+</cert>
+<key>
+-----BEGIN PRIVATE KEY-----
+KEY
+-----END PRIVATE KEY-----
+</key>
+`
+	r, err := confimport.Parse(content)
+	require.NoError(t, err)
+	require.Equal(t, "server", r.Role)
+	dir := t.TempDir()
+	require.NoError(t, r.Materialize(confimport.MaterializeOptions{DestDir: dir}))
+	require.Equal(t, filepath.Join(dir, "server.crt"), r.PKICertPath)
+	require.Equal(t, filepath.Join(dir, "server.key"), r.PKIKeyPath)
+}
+
+func TestMaterializeNoopEmpty(t *testing.T) {
+	r, err := confimport.Parse(clientFixture)
+	require.NoError(t, err)
+	require.False(t, r.HasInline())
+	require.NoError(t, r.Materialize(confimport.MaterializeOptions{DestDir: t.TempDir()}))
+}
+
+func TestMaterializeRequiresDest(t *testing.T) {
+	r, err := confimport.Parse(inlineClientFixture)
+	require.NoError(t, err)
+	err = r.Materialize(confimport.MaterializeOptions{})
+	require.Error(t, err)
 }
 
 func TestNetworkMaskToCIDR(t *testing.T) {
