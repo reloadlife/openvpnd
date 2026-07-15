@@ -127,7 +127,12 @@ func RenderClientProfile(inst db.Instance, client db.Client, mat ProfileMaterial
 	fmt.Fprintf(&b, "persist-key\n")
 	fmt.Fprintf(&b, "persist-tun\n")
 	fmt.Fprintf(&b, "remote-cert-tls server\n")
+	fmt.Fprintf(&b, "auth-nocache\n")
 	fmt.Fprintf(&b, "verb 3\n")
+	// Friendly UDP disconnect (OpenVPN Connect / community clients)
+	if strings.HasPrefix(strings.ToLower(proto), "udp") {
+		fmt.Fprintf(&b, "explicit-exit-notify 1\n")
+	}
 	if inst.Cipher != "" {
 		fmt.Fprintf(&b, "cipher %s\n", inst.Cipher)
 	}

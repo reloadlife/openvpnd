@@ -38,6 +38,15 @@ type profileLinkMsg struct {
 	err  error
 }
 
+type clientCreatedMsg struct {
+	client   pkgapi.ServerClient
+	link     *pkgapi.ProfileLink
+	qr       string
+	flash    string
+	warnings []string
+	err      error
+}
+
 type confViewMsg struct {
 	title  string
 	body   string
@@ -130,10 +139,31 @@ func doInstanceRestart(c *pkgapi.Client, name string) tea.Cmd {
 }
 
 func doCreateClient(c *pkgapi.Client, inst string, req pkgapi.ClientCreateRequest) tea.Cmd {
-	return doAction(func(ctx context.Context) error {
-		_, err := c.CreateClient(ctx, inst, req)
-		return err
-	}, "client "+req.CommonName+" created")
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		out, err := c.CreateClient(ctx, inst, req)
+		if err != nil {
+			return clientCreatedMsg{err: err}
+		}
+		flash := "client " + out.CommonName + " created"
+		if out.StaticIP != "" {
+			flash += " · " + out.StaticIP
+		}
+		if len(out.AutoFilled) > 0 {
+			flash += " · auto: " + strings.Join(out.AutoFilled, ", ")
+		}
+		msg := clientCreatedMsg{
+			client:   out.ServerClient,
+			flash:    flash,
+			warnings: out.Warnings,
+		}
+		if out.ProfileLink != nil {
+			msg.link = out.ProfileLink
+			msg.qr, _ = RenderQR(out.ProfileLink.ImportURL)
+		}
+		return msg
+	}
 }
 
 func doDeleteClient(c *pkgapi.Client, inst, cn string) tea.Cmd {

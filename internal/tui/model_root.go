@@ -178,6 +178,43 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 
+	case clientCreatedMsg:
+		m.busy = false
+		if msg.err != nil {
+			m.err = msg.err.Error()
+			m.status = "error"
+			// stay on form so user can fix
+			if m.mode == modeClientForm {
+				m.form.err = msg.err.Error()
+			}
+			return m, nil
+		}
+		m.err = ""
+		m.confirm = confirmNone
+		cl := msg.client
+		m.detailClient = &cl
+		var cmds []tea.Cmd
+		m, flashCmd := m.setFlash(msg.flash)
+		cmds = append(cmds, flashCmd)
+		var fetch tea.Cmd
+		m, fetch = m.beginFetch()
+		cmds = append(cmds, fetch)
+		if msg.link != nil {
+			link := *msg.link
+			m.profileLink = &link
+			m.confQR = msg.qr
+			m.mode = modeProfileLink
+			if len(msg.warnings) > 0 {
+				m.status = "warn: " + strings.Join(msg.warnings, "; ")
+			}
+		} else {
+			m.mode = modeClientDetail
+			if len(msg.warnings) > 0 {
+				m.err = strings.Join(msg.warnings, "; ")
+			}
+		}
+		return m, tea.Batch(cmds...)
+
 	case profileLinkMsg:
 		m.busy = false
 		if msg.err != nil {
@@ -584,8 +621,14 @@ func (m rootModel) openCreateForm() (tea.Model, tea.Cmd) {
 		m.mode = modeInstForm
 	case tabClients:
 		servers := m.serverNames()
-		m.form = newForm("Create client (space/ctrl+o browse cert/key)", clientCreateFields(servers), nil)
-		m.form.note = "VPN user on a server instance. Cert/key optional if you issue later."
+		vals := map[string]string{
+			"issue_cert": "y", "mint_link": "y", "link_ttl": "24h", "link_uses": "1",
+		}
+		if len(servers) == 1 {
+			vals["instance"] = servers[0]
+		}
+		m.form = newForm("New VPN user — cert + install link in one step", clientCreateFields(servers), vals)
+		m.form.note = "Enter a username (CN). We auto-issue a cert, pick a free IP, and show a QR install link."
 		m.form.SetSize(m.width, m.formAreaHeight())
 		m.mode = modeClientForm
 	case tabBinaries:
@@ -705,7 +748,10 @@ func (m rootModel) handleInstDetailKey(key string) (tea.Model, tea.Cmd) {
 	case "n":
 		// create client on this server
 		if m.detailInst.Role == "server" {
-			m.form = newForm("Create client", clientCreateFields([]string{name}), map[string]string{"instance": name})
+			m.form = newForm("New VPN user on "+name, clientCreateFields([]string{name}), map[string]string{
+				"instance": name, "issue_cert": "y", "mint_link": "y", "link_ttl": "24h", "link_uses": "1",
+			})
+			m.form.note = "Username (CN) only required. Cert + free IP + install QR are automatic."
 			m.form.SetSize(m.width, m.formAreaHeight())
 			m.mode = modeClientForm
 			return m, nil
@@ -817,12 +863,26 @@ func (m rootModel) submitClientForm() (tea.Model, tea.Cmd) {
 	inst := v["instance"]
 	cn := strings.TrimSpace(v["cn"])
 	if inst == "" || strings.HasPrefix(inst, "(") || cn == "" {
-		m.form.err = "instance and common name required"
+		m.form.err = "server instance and username (CN) required"
 		return m, nil
 	}
+	issue := truthy(v["issue_cert"])
+	mint := truthy(v["mint_link"])
 	req := pkgapi.ClientCreateRequest{
-		CommonName: cn, Name: v["name"], StaticIP: v["static_ip"],
+		CommonName: cn, Name: v["name"], StaticIP: v["static_ip"], Notes: v["notes"],
 		ClientCertPath: v["cert_path"], ClientKeyPath: v["key_path"],
+		IssueCert: &issue, MintProfileLink: mint,
+		ProfileLinkTTL: v["link_ttl"], ProfileLinkNote: v["notes"],
+	}
+	if uses := strings.TrimSpace(v["link_uses"]); uses != "" {
+		if n, err := parseIntField(uses); err == nil {
+			req.ProfileLinkMaxUses = &n
+		}
+	}
+	// Manual paths imply no auto-issue unless user forced both (API rejects)
+	if !issue && (v["cert_path"] == "" || v["key_path"] == "") && mint {
+		m.form.err = "Profile link needs certs — turn Issue cert ON, or set cert+key paths"
+		return m, nil
 	}
 	return m.startMutate(doCreateClient(m.cfg.Client, inst, req))
 }

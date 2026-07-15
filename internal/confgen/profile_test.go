@@ -40,6 +40,8 @@ func TestRenderClientProfileInline(t *testing.T) {
 	require.Contains(t, out, "<cert>")
 	require.Contains(t, out, "<key>")
 	require.Contains(t, out, "<tls-crypt>")
+	require.Contains(t, out, "explicit-exit-notify 1")
+	require.Contains(t, out, "auth-nocache")
 	require.True(t, strings.Contains(out, "alice") || strings.Contains(out, "cn=alice"))
 }
 

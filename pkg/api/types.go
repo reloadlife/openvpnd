@@ -239,7 +239,11 @@ type Instance struct {
 	UpdatedAt        time.Time `json:"updated_at"`
 }
 
-// ClientCreateRequest creates a server client.
+// ClientCreateRequest creates a server client (VPN user).
+//
+// Happy path: only common_name is required. Empty static_ip → pool allocate.
+// issue_cert defaults to true when cert paths are empty and a CA exists.
+// mint_profile_link=true returns a one-click download / OpenVPN Connect URL.
 type ClientCreateRequest struct {
 	CommonName        string   `json:"common_name"`
 	Name              string   `json:"name,omitempty"`
@@ -253,10 +257,23 @@ type ClientCreateRequest struct {
 	CertRef           string   `json:"cert_ref,omitempty"`
 	ClientCertPath    string   `json:"client_cert_path,omitempty"`
 	ClientKeyPath     string   `json:"client_key_path,omitempty"`
-	// IssueCert issues a client cert under CAName (or default CA) and sets paths.
-	IssueCert bool   `json:"issue_cert,omitempty"`
+	// IssueCert: nil = auto (true when no cert paths + CA available).
+	IssueCert *bool  `json:"issue_cert,omitempty"`
 	CAName    string `json:"ca_name,omitempty"`
-	Tags      []string `json:"tags,omitempty"`
+	// MintProfileLink mints a presigned .ovpn / openvpn://import-profile/ link.
+	MintProfileLink    bool   `json:"mint_profile_link,omitempty"`
+	ProfileLinkTTL     string `json:"profile_link_ttl,omitempty"` // e.g. "24h"
+	ProfileLinkMaxUses *int   `json:"profile_link_max_uses,omitempty"`
+	ProfileLinkNote    string `json:"profile_link_note,omitempty"`
+	Tags               []string `json:"tags,omitempty"`
+}
+
+// ClientCreateResponse is the created client plus optional one-click profile.
+type ClientCreateResponse struct {
+	ServerClient
+	AutoFilled  []string     `json:"auto_filled,omitempty"`
+	ProfileLink *ProfileLink `json:"profile_link,omitempty"`
+	Warnings    []string     `json:"warnings,omitempty"`
 }
 
 // ClientUpdateRequest patches a client.

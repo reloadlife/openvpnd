@@ -3,6 +3,8 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -41,12 +43,33 @@ func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	if req.CommonName == "" {
+
+	cn := strings.TrimSpace(req.CommonName)
+	if cn == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "common_name required")
 		return
 	}
-	staticIP := req.StaticIP
-	if netutil.IsAutoToken(staticIP) && inst.ServerNetwork != "" {
+	if err := validateClientCN(cn); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+
+	var auto []string
+	var warnings []string
+
+	display := strings.TrimSpace(req.Name)
+	if display == "" {
+		display = cn
+		auto = append(auto, "name="+display)
+	}
+
+	// Auto static IP from pool when empty/auto
+	staticIP := strings.TrimSpace(req.StaticIP)
+	if netutil.IsAutoToken(staticIP) {
+		if inst.ServerNetwork == "" {
+			writeError(w, http.StatusBadRequest, "bad_request", "server has no server_network; cannot auto-allocate static_ip")
+			return
+		}
 		used, err := s.store.ListUsedStaticIPs(r.Context(), name)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "db_error", err.Error())
@@ -58,14 +81,40 @@ func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		staticIP = ip
+		auto = append(auto, "static_ip="+staticIP)
 	} else if staticIP != "" {
 		if err := netutil.ValidateIP(staticIP); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 			return
 		}
 	}
+
+	// Decide cert issuance: default ON when no manual paths and a CA is available.
+	noManualCert := strings.TrimSpace(req.ClientCertPath) == "" && strings.TrimSpace(req.ClientKeyPath) == ""
+	caName := strings.TrimSpace(req.CAName)
+	if caName == "" {
+		caName = s.preferCAForInstance(r, inst)
+	}
+	hasCA := caName != ""
+	issue := false
+	if req.IssueCert != nil {
+		issue = *req.IssueCert
+	} else if noManualCert && hasCA {
+		issue = true
+		auto = append(auto, "issue_cert=true")
+	}
+	if issue && !hasCA {
+		writeError(w, http.StatusBadRequest, "no_ca",
+			"issue_cert requires a CA — create one (POST /v1/pki/cas) or create the server with create_ca_if_empty")
+		return
+	}
+	if issue && !noManualCert {
+		writeError(w, http.StatusBadRequest, "bad_request", "issue_cert cannot be combined with client_cert_path/client_key_path")
+		return
+	}
+
 	c, err := s.store.CreateClient(r.Context(), name, db.Client{
-		CommonName: req.CommonName, Name: req.Name, Notes: req.Notes,
+		CommonName: cn, Name: display, Notes: req.Notes,
 		StaticIP: staticIP, PushRoutes: req.PushRoutes, Suspended: req.Suspended,
 		TrafficLimitBytes: req.TrafficLimitBytes, BandwidthRxBps: req.BandwidthRxBps, BandwidthTxBps: req.BandwidthTxBps,
 		CertRef: req.CertRef, ClientCertPath: req.ClientCertPath, ClientKeyPath: req.ClientKeyPath, Tags: req.Tags,
@@ -74,20 +123,13 @@ func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "create_failed", err.Error())
 		return
 	}
-	if req.IssueCert {
-		caName := req.CAName
-		if caName == "" {
-			if cas, _ := s.store.ListCAs(r.Context()); len(cas) > 0 {
-				caName = cas[0].Name
-			}
-		}
-		if caName == "" {
-			writeError(w, http.StatusBadRequest, "no_ca", "client created but issue_cert needs a CA (POST /v1/pki/cas first)")
-			return
-		}
+
+	if issue {
 		issued, rec, err := s.issueAndStore(r, caName, "client", c.CommonName, 0, nil, nil, "", name)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "issue_failed", "client created but cert issue failed: "+err.Error())
+			// Roll back client so we do not leave half-provisioned users.
+			_ = s.store.DeleteClient(r.Context(), name, c.CommonName)
+			writeError(w, http.StatusBadRequest, "issue_failed", err.Error())
 			return
 		}
 		c.ClientCertPath = issued.CertPath
@@ -96,14 +138,101 @@ func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request) {
 		if updated, err := s.store.UpdateClient(r.Context(), name, c.CommonName, c); err == nil {
 			c = updated
 		}
+		auto = append(auto, "cert="+c.CertRef)
 	}
+
 	_ = s.store.AddEvent(r.Context(), "info", "create", name, c.CommonName, "client created", "{}")
 	_ = s.ForceReconcile(r.Context())
 	fresh, _ := s.store.GetClient(r.Context(), name, c.CommonName)
 	if fresh != nil {
 		c = *fresh
 	}
-	writeJSON(w, http.StatusCreated, s.toAPIClient(c))
+
+	resp := pkgapi.ClientCreateResponse{
+		ServerClient: s.toAPIClient(c),
+		AutoFilled:   auto,
+	}
+
+	// One-click profile link (optional)
+	if req.MintProfileLink {
+		link, warn, err := s.mintProfileLinkForClient(r, name, c.CommonName, req)
+		if err != nil {
+			warnings = append(warnings, "profile_link: "+err.Error())
+		} else {
+			resp.ProfileLink = link
+			auto = append(auto, "profile_link")
+			resp.AutoFilled = auto
+		}
+		if warn != "" {
+			warnings = append(warnings, warn)
+		}
+	} else if c.ClientCertPath == "" || c.ClientKeyPath == "" {
+		warnings = append(warnings, "no client cert yet — issue_cert or set paths before exporting .ovpn")
+	} else if strings.TrimSpace(inst.PublicEndpoint) == "" {
+		warnings = append(warnings, "set instance public_endpoint to generate installable profiles")
+	}
+
+	resp.Warnings = warnings
+	writeJSON(w, http.StatusCreated, resp)
+}
+
+func validateClientCN(cn string) error {
+	if len(cn) > 64 {
+		return fmt.Errorf("common_name too long (max 64)")
+	}
+	for _, r := range cn {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||
+			r == '-' || r == '_' || r == '.' || r == '@' {
+			continue
+		}
+		return fmt.Errorf("common_name has invalid character %q (use letters, digits, . _ - @)", r)
+	}
+	return nil
+}
+
+func (s *Server) preferCAForInstance(r *http.Request, inst *db.Instance) string {
+	cas, err := s.store.ListCAs(r.Context())
+	if err != nil || len(cas) == 0 {
+		return ""
+	}
+	if inst != nil && inst.PKICaPath != "" {
+		for _, c := range cas {
+			if c.CertPath == inst.PKICaPath {
+				return c.Name
+			}
+		}
+	}
+	return cas[0].Name
+}
+
+func (s *Server) mintProfileLinkForClient(r *http.Request, instance, cn string, req pkgapi.ClientCreateRequest) (*pkgapi.ProfileLink, string, error) {
+	if _, _, err := s.renderClientOVPN(r.Context(), instance, cn); err != nil {
+		return nil, "", err
+	}
+	ttl := s.cfg.ProfileLinkTTL()
+	if req.ProfileLinkTTL != "" {
+		d, err := time.ParseDuration(req.ProfileLinkTTL)
+		if err != nil || d <= 0 {
+			return nil, "", fmt.Errorf("invalid profile_link_ttl")
+		}
+		ttl = d
+	}
+	maxUses := s.cfg.ProfileLinks.DefaultMaxUses
+	if req.ProfileLinkMaxUses != nil {
+		maxUses = *req.ProfileLinkMaxUses
+	}
+	cli, err := s.store.GetClient(r.Context(), instance, cn)
+	if err != nil {
+		return nil, "", err
+	}
+	pt, err := s.store.CreateProfileToken(r.Context(), cli.ID, cli.InstanceID, ttl, maxUses, req.ProfileLinkNote)
+	if err != nil {
+		return nil, "", err
+	}
+	link := s.toProfileLink(pt)
+	_ = s.store.AddEvent(r.Context(), "info", "profile_link", instance, cn,
+		"profile link created on client create", fmt.Sprintf(`{"expires_at":%q,"max_uses":%d}`, pt.ExpiresAt.Format(time.RFC3339), maxUses))
+	return &link, "", nil
 }
 
 func (s *Server) handleGetClient(w http.ResponseWriter, r *http.Request) {

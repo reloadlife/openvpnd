@@ -63,8 +63,22 @@ Response includes `auto_filled: ["name=ovpn1", ...]`.
 | GET/POST | `/v1/instances/{name}/clients` |
 | GET/PATCH/DELETE | `/v1/instances/{name}/clients/{cn}` |
 | POST | `.../suspend` · `.../resume` · `.../reset-traffic` |
+| POST | `.../issue-cert` |
+| POST | `.../profile-link` |
+| GET | `.../client-config` |
 
-Empty / `auto` `static_ip` allocates the next free host from `server_network`.
+### Create smart defaults
+
+Minimal body: `{ "common_name": "alice" }`.
+
+| Field | Default |
+|-------|---------|
+| `static_ip` empty/`auto` | next free host in `server_network` |
+| `name` empty | same as `common_name` |
+| `issue_cert` omitted | **true** when no cert paths and a CA exists |
+| `mint_profile_link` | false; set true for one-click install URL in the response |
+
+Response includes `auto_filled`, optional `profile_link` (`download_url` + `import_url`), and `warnings`.
 
 ## Client profiles (one-click install)
 

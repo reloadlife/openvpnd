@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -256,19 +257,25 @@ func TestPKICreateAndIssue(t *testing.T) {
 	require.NotEmpty(t, inst.PKIKeyPath)
 	require.NotEmpty(t, inst.PKITLSCryptPath)
 
-	// client + issue
-	cb, _ := json.Marshal(pkgapi.ClientCreateRequest{CommonName: "bob", Name: "Bob"})
+	// one-shot client: auto IP + auto issue cert + profile link
+	uses := 1
+	cb, _ := json.Marshal(pkgapi.ClientCreateRequest{
+		CommonName: "bob", Name: "Bob",
+		MintProfileLink: true, ProfileLinkTTL: "1h", ProfileLinkMaxUses: &uses,
+	})
 	req = httptest.NewRequest(http.MethodPost, "/v1/instances/ovpn0/clients", bytes.NewReader(cb))
 	auth(req)
 	rr = httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 	require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
-
-	req = httptest.NewRequest(http.MethodPost, "/v1/instances/ovpn0/clients/bob/issue-cert", bytes.NewReader([]byte(`{"ca_name":"main"}`)))
-	auth(req)
-	rr = httptest.NewRecorder()
-	router.ServeHTTP(rr, req)
-	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	var created pkgapi.ClientCreateResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &created))
+	require.NotEmpty(t, created.ClientCertPath)
+	require.NotEmpty(t, created.ClientKeyPath)
+	require.NotEmpty(t, created.StaticIP)
+	require.NotNil(t, created.ProfileLink)
+	require.Contains(t, created.ProfileLink.ImportURL, "openvpn://import-profile/")
+	require.Contains(t, strings.Join(created.AutoFilled, ","), "issue_cert")
 
 	cli, err := store.GetClient(ctx, "ovpn0", "bob")
 	require.NoError(t, err)
@@ -284,4 +291,5 @@ func TestPKICreateAndIssue(t *testing.T) {
 	require.Contains(t, rr.Body.String(), "client")
 	require.Contains(t, rr.Body.String(), "<ca>")
 	require.Contains(t, rr.Body.String(), "<cert>")
+	require.Contains(t, rr.Body.String(), "explicit-exit-notify")
 }

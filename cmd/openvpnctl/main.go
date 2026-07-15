@@ -257,27 +257,42 @@ func clientCmd(configPath *string) *cobra.Command {
 			return w.Flush()
 		},
 	})
-	var displayName, staticIP string
+	var displayName, staticIP, caName, linkTTL string
+	var issueCert, mintLink bool
+	var linkUses int
 	create := &cobra.Command{
 		Use:   "create INSTANCE CN",
-		Short: "Create a server client (auto IP if --ip empty)",
+		Short: "Create VPN user (auto IP + cert; optional install link)",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_, c, err := loadClient(*configPath)
 			if err != nil {
 				return err
 			}
-			out, err := c.CreateClient(context.Background(), args[0], pkgapi.ClientCreateRequest{
+			req := pkgapi.ClientCreateRequest{
 				CommonName: args[1], Name: displayName, StaticIP: staticIP,
-			})
+				CAName: caName, MintProfileLink: mintLink, ProfileLinkTTL: linkTTL,
+			}
+			if cmd.Flags().Changed("issue-cert") {
+				req.IssueCert = &issueCert
+			}
+			if cmd.Flags().Changed("link-uses") {
+				req.ProfileLinkMaxUses = &linkUses
+			}
+			out, err := c.CreateClient(context.Background(), args[0], req)
 			if err != nil {
 				return err
 			}
 			return printJSON(out)
 		},
 	}
-	create.Flags().StringVar(&displayName, "name", "", "display name")
-	create.Flags().StringVar(&staticIP, "ip", "", "static IP (empty=auto)")
+	create.Flags().StringVar(&displayName, "name", "", "display name (default: CN)")
+	create.Flags().StringVar(&staticIP, "ip", "", "static IP (empty=auto from pool)")
+	create.Flags().StringVar(&caName, "ca", "", "CA name for issue-cert (default: instance CA)")
+	create.Flags().BoolVar(&issueCert, "issue-cert", true, "mint client cert (default on when CA exists)")
+	create.Flags().BoolVar(&mintLink, "link", false, "mint one-click profile download / import URL")
+	create.Flags().StringVar(&linkTTL, "link-ttl", "24h", "profile link TTL when --link")
+	create.Flags().IntVar(&linkUses, "link-uses", 1, "profile link max downloads when --link")
 	cmd.AddCommand(create)
 	cmd.AddCommand(&cobra.Command{
 		Use:   "delete INSTANCE CN",

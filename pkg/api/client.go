@@ -225,9 +225,9 @@ func (c *Client) ListClients(ctx context.Context, instance string) ([]ServerClie
 	return out, err
 }
 
-// CreateClient creates a client on a server instance.
-func (c *Client) CreateClient(ctx context.Context, instance string, req ClientCreateRequest) (ServerClient, error) {
-	var out ServerClient
+// CreateClient creates a client on a server instance (smart defaults + optional profile link).
+func (c *Client) CreateClient(ctx context.Context, instance string, req ClientCreateRequest) (ClientCreateResponse, error) {
+	var out ClientCreateResponse
 	err := c.do(ctx, http.MethodPost, "/v1/instances/"+instance+"/clients", req, &out)
 	return out, err
 }

@@ -89,7 +89,8 @@ export OPENVPNCTL_TOKEN=dev-token
 
 ./bin/openvpnctl binary list
 ./bin/openvpnctl instance create ovpn0 --role server --network 10.8.0.0/24 --binary default
-./bin/openvpnctl client create ovpn0 alice --name Alice
+./bin/openvpnctl client create ovpn0 alice --name Alice --link
+# → cert issued, free IP, optional install URL/QR in TUI
 ./bin/openvpnctl instance list
 ./bin/openvpnctl   # full-screen TUI
 ```

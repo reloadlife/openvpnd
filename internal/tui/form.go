@@ -768,34 +768,59 @@ func clientCreateFields(servers []string) []fieldDef {
 	}
 	return []fieldDef{
 		{
-			Key: "instance", Label: "Instance", Kind: fieldSelect, Options: opts, Section: "VPN user",
-			Hint: "server instance name",
-			Tip:  "Which server instance this user belongs to. Only server-role instances appear here. The client gets a tunnel IP from that server’s pool.",
+			Key: "instance", Label: "Server", Kind: fieldSelect, Options: opts, Section: "Who / where",
+			Hint: "server instance",
+			Tip:  "Server instance this user connects to. Tunnel IP comes from that server’s pool; cert is issued under the server’s CA when possible.",
 		},
 		{
-			Key: "cn", Label: "Common name",
+			Key: "cn", Label: "Username (CN)",
 			Hint: "alice, phone, laptop1",
-			Tip:  "Certificate Common Name — unique per user on this server. Used for CCD, suspend, profiles, and matching the cert subject. Letters/numbers preferred.",
+			Tip:  "Unique login identity (certificate Common Name). Required. Used in CCD, suspend, and .ovpn filename. Letters, digits, . _ - @.",
 		},
 		{
 			Key: "name", Label: "Display name",
-			Hint: "Alice’s phone",
-			Tip:  "Human-friendly label in the UI (not the cert CN). Optional; defaults can follow the CN.",
+			Hint: "empty → same as CN",
+			Tip:  "Friendly label in lists (e.g. “Alice phone”). Optional — defaults to the CN.",
 		},
 		{
 			Key: "static_ip", Label: "Static IP",
-			Hint: "empty = auto from pool",
-			Tip:  "Fixed tunnel IP inside the server network (e.g. 10.8.0.10). Leave empty to auto-allocate the next free address from the pool.",
+			Hint: "empty → next free from pool",
+			Tip:  "Fixed tunnel address inside the server network. Leave empty to auto-pick the next free host (recommended).",
 		},
 		{
-			Key: "cert_path", Label: "Cert path", Kind: fieldFile, AllowedTypes: []string{".crt", ".pem"}, Section: "Client cert material",
-			Hint: "optional client.crt",
-			Tip:  "Path to the client certificate used when building .ovpn profiles. Leave empty if you will Issue cert later from the client detail screen.",
+			Key: "issue_cert", Label: "Issue cert", Kind: fieldBool, Section: "One-shot provisioning",
+			Hint: "mint mTLS client cert",
+			Tip:  "ON (default) = create a client certificate under the managed CA and wire paths. Turn OFF only if you paste existing cert/key paths below.",
+		},
+		{
+			Key: "mint_link", Label: "Profile link", Kind: fieldBool,
+			Hint: "one-click install URL + QR",
+			Tip:  "ON (default) = after create, mint a time-limited download URL and openvpn://import-profile/ deep link (shown with QR). Needs server public_endpoint + certs.",
+		},
+		{
+			Key: "link_ttl", Label: "Link TTL",
+			Hint: "24h, 7d, 15m…",
+			Tip:  "How long the install link stays valid (Go duration). Default 24h. Shorter is safer for shared links.",
+		},
+		{
+			Key: "link_uses", Label: "Link max uses",
+			Hint: "1 = single download",
+			Tip:  "How many times the link can be downloaded. 1 = single use (recommended for sharing). 0 = unlimited until expiry.",
+		},
+		{
+			Key: "notes", Label: "Notes",
+			Hint: "optional operator note",
+			Tip:  "Optional note stored on the client record (who this is for, ticket id, etc.). Not sent to the VPN peer.",
+		},
+		{
+			Key: "cert_path", Label: "Cert path", Kind: fieldFile, AllowedTypes: []string{".crt", ".pem"}, Section: "Manual PKI (optional)",
+			Hint: "only if Issue cert is OFF",
+			Tip:  "Existing client certificate on this host. Leave empty when Issue cert is ON. Using both is rejected.",
 		},
 		{
 			Key: "key_path", Label: "Key path", Kind: fieldFile, AllowedTypes: []string{".key", ".pem"},
-			Hint: "optional client.key",
-			Tip:  "Path to the client private key for profile export. Pair with Cert path. Prefer managed Issue cert when possible.",
+			Hint: "only if Issue cert is OFF",
+			Tip:  "Existing client private key. Pair with Cert path when not using Issue cert.",
 		},
 	}
 }
