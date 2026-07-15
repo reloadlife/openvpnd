@@ -221,6 +221,8 @@ Response includes `auto_filled: ["name=ovpn1", ...]`.
 | POST | `.../profile-link` |
 | GET | `.../client-config` |
 
+Optional peer policy fields (create/update): `traffic_limit_bytes`, `expires_at` (RFC3339 UTC), `bandwidth_rx_bps`, `bandwidth_tx_bps`, `bandwidth_total_bps` (when >0 both directions = total). Suspend/resume emit `peer.suspended` / `peer.resumed` with `meta.reason`. See [CONFIGURATION.md](CONFIGURATION.md#peer-policy-server-clients).
+
 ### Create smart defaults
 
 Minimal body: `{ "common_name": "alice" }`.

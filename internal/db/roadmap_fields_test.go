@@ -3,6 +3,7 @@ package db_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -55,22 +56,36 @@ func TestRoadmapFieldsRoundTrip(t *testing.T) {
 	require.Equal(t, "CHANGED", updated.TLSCipher)
 	require.False(t, updated.BridgeMode)
 
+	exp := time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC)
 	cli, err := store.CreateClient(ctx, "full", db.Client{
 		CommonName: "u1", Name: "User1", StaticIP: "10.1.0.10",
 		IRoutes: []string{"10.20.0.0/16"}, PushDNS: []string{"8.8.8.8"},
 		PushDomain: "lab", RedirectGateway: true, DisablePush: []string{"route"},
-		BandwidthRxBps: 1000, BandwidthTxBps: 500, TrafficLimitBytes: 9999,
+		BandwidthRxBps: 1000, BandwidthTxBps: 500, BandwidthTotalBps: 8_000_000,
+		TrafficLimitBytes: 9999, ExpiresAt: exp,
 	})
 	require.NoError(t, err)
 	require.Equal(t, []string{"8.8.8.8"}, cli.PushDNS)
 	require.True(t, cli.RedirectGateway)
 	require.Equal(t, int64(9999), cli.TrafficLimitBytes)
+	require.Equal(t, int64(8_000_000), cli.BandwidthTotalBps)
+	require.True(t, cli.ExpiresAt.Equal(exp))
 
 	again, err := store.GetClient(ctx, "full", "u1")
 	require.NoError(t, err)
 	require.Equal(t, []string{"10.20.0.0/16"}, again.IRoutes)
 	require.Equal(t, []string{"route"}, again.DisablePush)
 	require.Equal(t, "lab", again.PushDomain)
+	require.Equal(t, int64(8_000_000), again.BandwidthTotalBps)
+	require.True(t, again.ExpiresAt.Equal(exp))
+
+	// Clear expiry via update (zero time → empty DB column).
+	again.ExpiresAt = time.Time{}
+	again.BandwidthTotalBps = 0
+	updatedCli, err := store.UpdateClient(ctx, "full", "u1", *again)
+	require.NoError(t, err)
+	require.True(t, updatedCli.ExpiresAt.IsZero())
+	require.Equal(t, int64(0), updatedCli.BandwidthTotalBps)
 }
 
 func TestCAWithCRLPathRoundTrip(t *testing.T) {

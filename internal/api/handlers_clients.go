@@ -113,12 +113,20 @@ func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	expiresAt, err := parseClientExpiresAt(req.ExpiresAt)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "expires_at: "+err.Error())
+		return
+	}
+
 	c, err := s.store.CreateClient(r.Context(), name, db.Client{
 		CommonName: cn, Name: display, Notes: req.Notes,
 		StaticIP: staticIP, PushRoutes: req.PushRoutes, IRoutes: req.IRoutes,
 		PushDNS: req.PushDNS, PushDomain: req.PushDomain, RedirectGateway: req.RedirectGateway,
 		DisablePush: req.DisablePush, Suspended: req.Suspended,
-		TrafficLimitBytes: req.TrafficLimitBytes, BandwidthRxBps: req.BandwidthRxBps, BandwidthTxBps: req.BandwidthTxBps,
+		TrafficLimitBytes: req.TrafficLimitBytes,
+		BandwidthRxBps: req.BandwidthRxBps, BandwidthTxBps: req.BandwidthTxBps, BandwidthTotalBps: req.BandwidthTotalBps,
+		ExpiresAt: expiresAt,
 		CertRef: req.CertRef, ClientCertPath: req.ClientCertPath, ClientKeyPath: req.ClientKeyPath, Tags: req.Tags,
 	})
 	if err != nil {
@@ -289,6 +297,7 @@ func (s *Server) handleUpdateClient(w http.ResponseWriter, r *http.Request) {
 	if req.DisablePush != nil {
 		c.DisablePush = req.DisablePush
 	}
+	wasSuspended := c.Suspended
 	if req.Suspended != nil {
 		c.Suspended = *req.Suspended
 	}
@@ -300,6 +309,17 @@ func (s *Server) handleUpdateClient(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.BandwidthTxBps != nil {
 		c.BandwidthTxBps = *req.BandwidthTxBps
+	}
+	if req.BandwidthTotalBps != nil {
+		c.BandwidthTotalBps = *req.BandwidthTotalBps
+	}
+	if req.ExpiresAt != nil {
+		exp, err := parseClientExpiresAt(*req.ExpiresAt)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "expires_at: "+err.Error())
+			return
+		}
+		c.ExpiresAt = exp
 	}
 	if req.CertRef != nil {
 		c.CertRef = *req.CertRef
@@ -317,6 +337,15 @@ func (s *Server) handleUpdateClient(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
+	}
+	// If PATCH sets suspended, kill + event like dedicated suspend endpoint.
+	if !wasSuspended && out.Suspended {
+		if mgmt, err := s.backend.Management(r.Context(), name); err == nil {
+			_ = mgmt.KillClient(r.Context(), cn)
+			_ = mgmt.Close()
+		}
+		_ = s.store.AddEvent(r.Context(), "warn", "peer.suspended", name, cn,
+			"client suspended", `{"reason":"manual"}`)
 	}
 	_ = s.ForceReconcile(r.Context())
 	writeJSON(w, http.StatusOK, s.toAPIClient(out))
@@ -355,10 +384,16 @@ func (s *Server) setClientSuspended(w http.ResponseWriter, r *http.Request, susp
 		return
 	}
 	if suspended {
+		// CCD disable is applied on ForceReconcile; kill live session immediately.
 		if mgmt, err := s.backend.Management(r.Context(), name); err == nil {
 			_ = mgmt.KillClient(r.Context(), cn)
 			_ = mgmt.Close()
 		}
+		_ = s.store.AddEvent(r.Context(), "warn", "peer.suspended", name, cn,
+			"client suspended", `{"reason":"manual"}`)
+	} else {
+		_ = s.store.AddEvent(r.Context(), "info", "peer.resumed", name, cn,
+			"client resumed", `{"reason":"manual"}`)
 	}
 	_ = s.ForceReconcile(r.Context())
 	fresh, _ := s.store.GetClient(r.Context(), name, cn)
@@ -399,6 +434,10 @@ func (s *Server) toAPIClient(c db.Client) pkgapi.ServerClient {
 			}
 		}
 	}
+	expiresAt := ""
+	if !c.ExpiresAt.IsZero() {
+		expiresAt = c.ExpiresAt.UTC().Format(time.RFC3339)
+	}
 	return pkgapi.ServerClient{
 		ID: c.ID, InstanceID: c.InstanceID, InstanceName: c.InstanceName,
 		CommonName: c.CommonName, Name: c.Name, Notes: c.Notes,
@@ -406,7 +445,9 @@ func (s *Server) toAPIClient(c db.Client) pkgapi.ServerClient {
 		PushDNS: c.PushDNS, PushDomain: c.PushDomain, RedirectGateway: c.RedirectGateway,
 		DisablePush: c.DisablePush,
 		Suspended: c.Suspended, Connected: connected,
-		TrafficLimitBytes: c.TrafficLimitBytes, BandwidthRxBps: c.BandwidthRxBps, BandwidthTxBps: c.BandwidthTxBps,
+		TrafficLimitBytes: c.TrafficLimitBytes,
+		BandwidthRxBps: c.BandwidthRxBps, BandwidthTxBps: c.BandwidthTxBps, BandwidthTotalBps: c.BandwidthTotalBps,
+		ExpiresAt: expiresAt,
 		CertRef: c.CertRef, ClientCertPath: c.ClientCertPath, ClientKeyPath: c.ClientKeyPath,
 		RealAddress: c.RealAddress, VirtualAddress: c.VirtualAddress,
 		ConnectedSince: c.ConnectedSince,
@@ -414,4 +455,20 @@ func (s *Server) toAPIClient(c db.Client) pkgapi.ServerClient {
 		RxBps: c.LastRxBps, TxBps: c.LastTxBps, Tags: c.Tags,
 		CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
 	}
+}
+
+// parseClientExpiresAt accepts RFC3339 / RFC3339Nano; empty string = never.
+func parseClientExpiresAt(s string) (time.Time, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}, nil
+	}
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		t, err = time.Parse(time.RFC3339, s)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("must be RFC3339 UTC (e.g. 2026-12-31T00:00:00Z)")
+		}
+	}
+	return t.UTC(), nil
 }

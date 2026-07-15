@@ -247,11 +247,16 @@ func RenderInstanceOpts(inst db.Instance, paths Paths, clients []db.Client, opts
 		switch strings.ToLower(strings.TrimSpace(inst.Role)) {
 		case "server":
 			for _, c := range clients {
-				if c.BandwidthRxBps > maxBits {
-					maxBits = c.BandwidthRxBps
+				// Prefer total when set (both directions = total); else max of rx/tx.
+				rx, tx := c.BandwidthRxBps, c.BandwidthTxBps
+				if c.BandwidthTotalBps > 0 {
+					rx, tx = c.BandwidthTotalBps, c.BandwidthTotalBps
 				}
-				if c.BandwidthTxBps > maxBits {
-					maxBits = c.BandwidthTxBps
+				if rx > maxBits {
+					maxBits = rx
+				}
+				if tx > maxBits {
+					maxBits = tx
 				}
 			}
 			if inst.BandwidthRxBps > maxBits {

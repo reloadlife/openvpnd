@@ -87,10 +87,10 @@ Per instance: `binary_name: v24` or `binary_path: /custom/openvpn`.
 
 | Role | What you limit | Where the knobs live |
 |------|----------------|----------------------|
-| **server** | Each connected **peer** (VPN user / CN), optionally the whole TUN as a ceiling | Peer: client `bandwidth_rx_bps` / `bandwidth_tx_bps` (+ `traffic_limit_bytes` quota). Ceiling: instance `bandwidth_*` |
+| **server** | Each connected **peer** (VPN user / CN), optionally the whole TUN as a ceiling | Peer: client `bandwidth_rx_bps` / `bandwidth_tx_bps` / `bandwidth_total_bps` (+ `traffic_limit_bytes` quota, `expires_at`). Ceiling: instance `bandwidth_*` |
 | **client** | The **whole tunnel** (e.g. `zur0`, `de0`) — no multi-peer users | Instance `bandwidth_rx_bps` / `bandwidth_tx_bps` on that client instance |
 
-Directions are bits/sec (same unit as live rate metrics): **rx** = download, **tx** = upload.
+Directions are bits/sec (same unit as live rate metrics): **rx** = download, **tx** = upload. When peer `bandwidth_total_bps` > 0, both directions are capped at that value (rx/tx fields ignored for shaping).
 
 Enforcement mode (`openvpn.bandwidth_enforcement`):
 
@@ -109,6 +109,43 @@ openvpn:
 Reconciler applies/removes rules after `EnsureInstance`. Cleared limits drop host rules. Over-quota **server peers** are suspended (`disable` in CCD) and killed via management if connected.
 
 When `bandwidth_enforcement: tc`, `/readyz` includes `bandwidth_tc=ok|missing` (needs `iproute2` `tc` on PATH).
+
+## Peer policy (server clients)
+
+Per-CN policy on **server** instances (API create/update or TUI user form). Optional fields; omit for unlimited / never expires.
+
+| Field | Meaning |
+|-------|---------|
+| `traffic_limit_bytes` | Soft quota on effective rx+tx. When exceeded → auto-suspend |
+| `expires_at` | RFC3339 UTC; after this time → auto-suspend. Empty = never |
+| `bandwidth_rx_bps` / `bandwidth_tx_bps` | Per-direction rate caps (bits/sec) when total is unset |
+| `bandwidth_total_bps` | When >0, **both** directions shaped at this rate |
+| `suspended` | Manual block; also set by auto-suspend paths |
+
+**Auto-suspend path** (same as `POST .../clients/{cn}/suspend`):
+
+1. `suspended=true` in DB  
+2. CCD file gets `disable` on next reconcile  
+3. Live session killed via management if connected  
+4. Event `peer.suspended` (or `peer.expired`) with meta `{"reason":"manual|traffic_limit|expired",...}`
+
+Resume: `POST .../resume` clears the flag (does not clear expiry or quota — reset traffic or extend `expires_at` if needed).
+
+Example (10 GiB quota, expires end of 2026, ~1 MB/s each way):
+
+```json
+{
+  "common_name": "alice",
+  "traffic_limit_bytes": 10737418240,
+  "expires_at": "2026-12-31T00:00:00Z",
+  "bandwidth_total_bps": 8000000
+}
+```
+
+| Value | Approx |
+|-------|--------|
+| `10737418240` | 10 GiB total traffic |
+| `8000000` | 8 Mbit/s ≈ 1 MB/s per direction |
 
 ## Webhooks (controller push)
 

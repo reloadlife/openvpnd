@@ -501,13 +501,15 @@ type ClientCreateRequest struct {
 	PushDomain        string   `json:"push_domain,omitempty"`
 	RedirectGateway   bool     `json:"redirect_gateway,omitempty"`
 	DisablePush       []string `json:"disable_push,omitempty"`
-	Suspended         bool     `json:"suspended,omitempty"`
-	TrafficLimitBytes int64    `json:"traffic_limit_bytes,omitempty"`
-	BandwidthRxBps    int64    `json:"bandwidth_rx_bps,omitempty"`
-	BandwidthTxBps    int64    `json:"bandwidth_tx_bps,omitempty"`
-	CertRef           string   `json:"cert_ref,omitempty"`
-	ClientCertPath    string   `json:"client_cert_path,omitempty"`
-	ClientKeyPath     string   `json:"client_key_path,omitempty"`
+	Suspended         bool   `json:"suspended,omitempty"`
+	TrafficLimitBytes int64  `json:"traffic_limit_bytes,omitempty"`
+	BandwidthRxBps    int64  `json:"bandwidth_rx_bps,omitempty"`
+	BandwidthTxBps    int64  `json:"bandwidth_tx_bps,omitempty"`
+	BandwidthTotalBps int64  `json:"bandwidth_total_bps,omitempty"` // when >0, both directions = total
+	ExpiresAt         string `json:"expires_at,omitempty"`         // RFC3339 UTC; empty = never
+	CertRef           string `json:"cert_ref,omitempty"`
+	ClientCertPath    string `json:"client_cert_path,omitempty"`
+	ClientKeyPath     string `json:"client_key_path,omitempty"`
 	// IssueCert: nil = auto (true when no cert paths + CA available).
 	IssueCert *bool  `json:"issue_cert,omitempty"`
 	CAName    string `json:"ca_name,omitempty"`
@@ -542,6 +544,8 @@ type ClientUpdateRequest struct {
 	TrafficLimitBytes *int64   `json:"traffic_limit_bytes,omitempty"`
 	BandwidthRxBps    *int64   `json:"bandwidth_rx_bps,omitempty"`
 	BandwidthTxBps    *int64   `json:"bandwidth_tx_bps,omitempty"`
+	BandwidthTotalBps *int64   `json:"bandwidth_total_bps,omitempty"`
+	ExpiresAt         *string  `json:"expires_at,omitempty"` // RFC3339 UTC; "" clears
 	CertRef           *string  `json:"cert_ref,omitempty"`
 	ClientCertPath    *string  `json:"client_cert_path,omitempty"`
 	ClientKeyPath     *string  `json:"client_key_path,omitempty"`
@@ -568,6 +572,8 @@ type ServerClient struct {
 	TrafficLimitBytes int64     `json:"traffic_limit_bytes"`
 	BandwidthRxBps    int64     `json:"bandwidth_rx_bps"`
 	BandwidthTxBps    int64     `json:"bandwidth_tx_bps"`
+	BandwidthTotalBps int64     `json:"bandwidth_total_bps"`
+	ExpiresAt         string    `json:"expires_at,omitempty"` // RFC3339 UTC; empty = never
 	CertRef           string    `json:"cert_ref,omitempty"`
 	ClientCertPath    string    `json:"client_cert_path,omitempty"`
 	ClientKeyPath     string    `json:"client_key_path,omitempty"`

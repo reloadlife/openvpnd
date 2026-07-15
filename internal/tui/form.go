@@ -932,17 +932,27 @@ func clientCreateFields(servers []string) []fieldDef {
 		{
 			Key: "bandwidth_rx", Label: "Peer RX bps",
 			Hint: "bits/sec download to peer",
-			Tip:  "Server-role only: rate limit download to this peer (bits/sec). Needs static_ip + bandwidth_enforcement=tc. Not used for client-role tunnels (use instance Tunnel RX/TX).",
+			Tip:  "Server-role only: rate limit download to this peer (bits/sec). Needs static_ip + bandwidth_enforcement=tc. Ignored when Peer total bps is set. Not used for client-role tunnels.",
 		},
 		{
 			Key: "bandwidth_tx", Label: "Peer TX bps",
 			Hint: "bits/sec upload from peer",
-			Tip:  "Server-role only: rate limit upload from this peer (bits/sec). Client-role whole-tunnel caps live on the instance form.",
+			Tip:  "Server-role only: rate limit upload from this peer (bits/sec). Ignored when Peer total bps is set. Client-role whole-tunnel caps live on the instance form.",
+		},
+		{
+			Key: "bandwidth_total", Label: "Peer total bps",
+			Hint: "bits/sec both directions",
+			Tip:  "When >0, both RX and TX are capped at this rate (simple combined budget). Example 8000000 ≈ 1 MB/s each way. Overrides Peer RX/TX when set.",
 		},
 		{
 			Key: "traffic_limit", Label: "Traffic cap",
 			Hint: "total bytes before suspend",
-			Tip:  "Peer volume quota in bytes; suspend + kill when exceeded. 0/empty = none. Server peers only.",
+			Tip:  "Peer volume quota in bytes; suspend + kill when exceeded. 0/empty = none. Example 10737418240 = 10 GiB. Server peers only.",
+		},
+		{
+			Key: "expires_at", Label: "Expires at",
+			Hint: "RFC3339 UTC or empty",
+			Tip:  "Optional peer expiry (e.g. 2026-12-31T00:00:00Z). After this time the peer is auto-suspended (CCD disable + kill). Empty = never. s/S still suspends/resumes manually.",
 		},
 		{
 			Key: "issue_cert", Label: "Issue cert", Kind: fieldBool, Section: "One-shot provisioning",

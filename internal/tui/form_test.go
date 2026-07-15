@@ -69,7 +69,9 @@ func TestClientCreateDefaultsFields(t *testing.T) {
 	require.Contains(t, fieldKeys(f), "disable_push")
 	require.Contains(t, fieldKeys(f), "bandwidth_rx")
 	require.Contains(t, fieldKeys(f), "bandwidth_tx")
+	require.Contains(t, fieldKeys(f), "bandwidth_total")
 	require.Contains(t, fieldKeys(f), "traffic_limit")
+	require.Contains(t, fieldKeys(f), "expires_at")
 }
 
 func TestAdoptInstanceFields(t *testing.T) {

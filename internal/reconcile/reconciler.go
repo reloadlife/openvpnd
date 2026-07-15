@@ -16,6 +16,7 @@ import (
 	"github.com/reloadlife/openvpnd/internal/db"
 	"github.com/reloadlife/openvpnd/internal/features"
 	"github.com/reloadlife/openvpnd/internal/ovpnbackend"
+	"github.com/reloadlife/openvpnd/internal/policy"
 	"github.com/reloadlife/openvpnd/internal/stats"
 )
 
@@ -199,6 +200,17 @@ func (r *Reconciler) applyInstance(ctx context.Context, inst db.Instance) error 
 		if err != nil {
 			return err
 		}
+		// Apply expire (and traffic from last-known counters) before CCD so disable is written.
+		now := time.Now().UTC()
+		for i := range clients {
+			c := clients[i]
+			if ok, reason := policy.ShouldAutoSuspend(c, now); ok {
+				if err := r.store.SetClientSuspended(ctx, c.ID, true); err == nil {
+					clients[i].Suspended = true
+					r.emitAutoSuspend(ctx, inst.Name, c, reason, c.EffectiveRx(), c.EffectiveTx())
+				}
+			}
+		}
 	}
 
 	paths := confgen.Paths{
@@ -271,11 +283,15 @@ func (r *Reconciler) applyInstance(ctx context.Context, inst db.Instance) error 
 					if c.Suspended {
 						continue
 					}
+					rx, tx := policy.EffectiveBandwidth(c.BandwidthRxBps, c.BandwidthTxBps, c.BandwidthTotalBps)
+					if rx <= 0 && tx <= 0 {
+						continue
+					}
 					limits = append(limits, bandwidth.ClientLimit{
 						CommonName: c.CommonName,
 						StaticIP:   c.StaticIP,
-						RxBps:      c.BandwidthRxBps,
-						TxBps:      c.BandwidthTxBps,
+						RxBps:      rx,
+						TxBps:      tx,
 					})
 				}
 				if err := r.bw.Sync(ctx, inst.Name, inst.Device, limits); err != nil {
@@ -391,21 +407,16 @@ func (r *Reconciler) applyInstance(ctx context.Context, inst db.Instance) error 
 						r.prevSample[ck] = sample{rx: crx, tx: ctxb, at: now}
 					}
 
-					// Traffic quota: suspend + kill when effective bytes exceed limit.
-					if !c.Suspended && c.TrafficLimitBytes > 0 {
+					// Peer policy: traffic quota (live counters) and late expire check.
+					if !c.Suspended {
 						tmp := c
 						tmp.LastRxBytes = crx
 						tmp.LastTxBytes = ctxb
-						if bandwidth.ExceedsTrafficLimit(tmp.EffectiveRx(), tmp.EffectiveTx(), c.TrafficLimitBytes) {
+						if ok, reason := policy.ShouldAutoSuspend(tmp, now); ok {
 							if err := r.store.SetClientSuspended(ctx, c.ID, true); err == nil {
 								c.Suspended = true
 								clients[i].Suspended = true
-								_ = r.store.AddEvent(ctx, "warn", "traffic_limit", inst.Name, c.CommonName,
-									fmt.Sprintf("traffic limit exceeded (%d bytes); client suspended", c.TrafficLimitBytes),
-									fmt.Sprintf(`{"rx":%d,"tx":%d,"limit":%d}`, tmp.EffectiveRx(), tmp.EffectiveTx(), c.TrafficLimitBytes))
-								r.log.Warn("traffic limit exceeded; suspending client",
-									"instance", inst.Name, "cn", c.CommonName,
-									"rx", tmp.EffectiveRx(), "tx", tmp.EffectiveTx(), "limit", c.TrafficLimitBytes)
+								r.emitAutoSuspend(ctx, inst.Name, tmp, reason, tmp.EffectiveRx(), tmp.EffectiveTx())
 							}
 						}
 					}
@@ -506,6 +517,30 @@ func (r *Reconciler) applyInstance(ctx context.Context, inst db.Instance) error 
 	// persist conf hash on instance row for next comparison via UpdateInstance is heavy; runtime is enough
 	_ = filepath.Separator
 	return nil
+}
+
+// emitAutoSuspend records peer.suspended / peer.expired and logs.
+func (r *Reconciler) emitAutoSuspend(ctx context.Context, instance string, c db.Client, reason string, effRx, effTx int64) {
+	var kind, msg, meta string
+	switch reason {
+	case policy.ReasonExpired:
+		kind = "peer.expired"
+		msg = "client expired; suspended"
+		meta = fmt.Sprintf(`{"reason":%q,"expires_at":%q}`, policy.ReasonExpired, c.ExpiresAt.UTC().Format(time.RFC3339))
+	case policy.ReasonTrafficLimit:
+		kind = "peer.suspended"
+		msg = fmt.Sprintf("traffic limit exceeded (%d bytes); client suspended", c.TrafficLimitBytes)
+		meta = fmt.Sprintf(`{"reason":%q,"rx":%d,"tx":%d,"limit":%d}`,
+			policy.ReasonTrafficLimit, effRx, effTx, c.TrafficLimitBytes)
+	default:
+		kind = "peer.suspended"
+		msg = "client auto-suspended"
+		meta = fmt.Sprintf(`{"reason":%q}`, reason)
+	}
+	_ = r.store.AddEvent(ctx, "warn", kind, instance, c.CommonName, msg, meta)
+	r.log.Warn("auto-suspending client",
+		"instance", instance, "cn", c.CommonName, "reason", reason,
+		"rx", effRx, "tx", effTx)
 }
 
 // readIfaceBytes returns cumulative rx/tx byte counters for a Linux netdev

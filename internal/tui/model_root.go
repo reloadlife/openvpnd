@@ -1456,8 +1456,14 @@ func (m rootModel) submitClientForm() (tea.Model, tea.Cmd) {
 	if n, err := parseInt64Field(v["bandwidth_tx"]); err == nil {
 		req.BandwidthTxBps = n
 	}
+	if n, err := parseInt64Field(v["bandwidth_total"]); err == nil {
+		req.BandwidthTotalBps = n
+	}
 	if n, err := parseInt64Field(v["traffic_limit"]); err == nil {
 		req.TrafficLimitBytes = n
+	}
+	if exp := strings.TrimSpace(v["expires_at"]); exp != "" {
+		req.ExpiresAt = exp
 	}
 	if uses := strings.TrimSpace(v["link_uses"]); uses != "" {
 		if n, err := parseIntField(uses); err == nil {
@@ -2117,13 +2123,18 @@ func (m rootModel) viewClientDetail(w, h int) string {
 	if len(cl.DisablePush) > 0 {
 		kv("Disable push", strings.Join(cl.DisablePush, ", "))
 	}
-	if cl.BandwidthRxBps > 0 || cl.BandwidthTxBps > 0 {
+	if cl.BandwidthTotalBps > 0 {
+		kv("Bandwidth", fmt.Sprintf("total=%d bps (both directions)", cl.BandwidthTotalBps))
+	} else if cl.BandwidthRxBps > 0 || cl.BandwidthTxBps > 0 {
 		kv("Bandwidth", fmt.Sprintf("rx=%d tx=%d bps", cl.BandwidthRxBps, cl.BandwidthTxBps))
 	}
 	if cl.TrafficLimitBytes > 0 {
 		kv("Traffic cap", formatBytes(cl.TrafficLimitBytes))
 	}
-	kv("Suspended", fmt.Sprintf("%v", cl.Suspended))
+	if cl.ExpiresAt != "" {
+		kv("Expires", cl.ExpiresAt)
+	}
+	kv("Suspended", fmt.Sprintf("%v  (s/S suspend/resume)", cl.Suspended))
 	kv("Connected", fmt.Sprintf("%v  %s", cl.Connected, orDash(cl.ConnectedSince)))
 	kv("Real addr", orDash(cl.RealAddress))
 	kv("Virt addr", orDash(cl.VirtualAddress))

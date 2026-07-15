@@ -148,8 +148,13 @@ type Client struct {
 	DisablePush     []string `json:"disable_push,omitempty"` // OpenVPN 2.5+ push-remove names
 	Suspended         bool      `json:"suspended"`
 	TrafficLimitBytes int64     `json:"traffic_limit_bytes"`
+	// Bandwidth*Bps are per-peer rate caps (bits/sec). When BandwidthTotalBps > 0,
+	// both directions are shaped at Total (see policy.EffectiveBandwidth).
 	BandwidthRxBps    int64     `json:"bandwidth_rx_bps"`
 	BandwidthTxBps    int64     `json:"bandwidth_tx_bps"`
+	BandwidthTotalBps int64     `json:"bandwidth_total_bps"`
+	// ExpiresAt: zero = never; when past, reconciler auto-suspends the peer.
+	ExpiresAt         time.Time `json:"expires_at,omitempty"`
 	CertRef           string    `json:"cert_ref,omitempty"`
 	ClientCertPath    string    `json:"client_cert_path,omitempty"`
 	ClientKeyPath     string    `json:"client_key_path,omitempty"`
