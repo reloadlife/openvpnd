@@ -3,6 +3,8 @@ package api
 import (
 	"net/http"
 	"os"
+	"os/exec"
+	"strings"
 
 	"github.com/reloadlife/openvpnd/internal/db"
 	"github.com/reloadlife/openvpnd/internal/ovpnbackend"
@@ -76,6 +78,35 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 
 	// backend kind (informational)
 	checks["backend"] = s.backendKind()
+
+	// bandwidth / tc readiness (when enforcement needs the host tool)
+	bwMode := "off"
+	if s.cfg != nil {
+		bwMode = strings.ToLower(strings.TrimSpace(s.cfg.OpenVPN.BandwidthEnforcement))
+	}
+	checks["bandwidth_mode"] = bwMode
+	switch bwMode {
+	case "tc", "htb":
+		if _, err := exec.LookPath("tc"); err != nil {
+			checks["bandwidth_tc"] = "missing"
+			if status != "fail" {
+				status = "degraded"
+			}
+		} else {
+			checks["bandwidth_tc"] = "ok"
+		}
+	case "shaper", "log", "off", "", "none":
+		checks["bandwidth_tc"] = "n/a"
+	default:
+		checks["bandwidth_tc"] = "n/a"
+	}
+
+	// webhooks (informational)
+	if s.cfg != nil && s.cfg.Webhooks.Enabled && strings.TrimSpace(s.cfg.Webhooks.URL) != "" {
+		checks["webhooks"] = "enabled"
+	} else {
+		checks["webhooks"] = "disabled"
+	}
 
 	code := http.StatusOK
 	if status == "fail" {

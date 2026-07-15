@@ -93,6 +93,18 @@ type DaemonConfig struct {
 	ReadOnly bool `mapstructure:"read_only"`
 	// Production enables strict startup checks (non-default auth token, etc.).
 	Production bool `mapstructure:"production"`
+	// Webhooks push agent events to an external controller (optional).
+	Webhooks WebhooksConfig `mapstructure:"webhooks"`
+}
+
+// WebhooksConfig delivers HTTP callbacks for controller integration.
+type WebhooksConfig struct {
+	Enabled   bool     `mapstructure:"enabled" yaml:"enabled"`
+	URL       string   `mapstructure:"url" yaml:"url"`
+	Secret    string   `mapstructure:"secret" yaml:"secret"`
+	Events    []string `mapstructure:"events" yaml:"events"` // empty/* = all; supports peer.*
+	Timeout   string   `mapstructure:"timeout" yaml:"timeout"`
+	QueueSize int      `mapstructure:"queue_size" yaml:"queue_size"`
 }
 
 // LoadDaemon loads daemon config from file/env/defaults.
@@ -195,6 +207,11 @@ func setDaemonDefaults(v *viper.Viper) {
 	v.SetDefault("log.format", "json")
 	v.SetDefault("read_only", false)
 	v.SetDefault("production", false)
+	v.SetDefault("webhooks.enabled", false)
+	v.SetDefault("webhooks.url", "")
+	v.SetDefault("webhooks.secret", "")
+	v.SetDefault("webhooks.timeout", "5s")
+	v.SetDefault("webhooks.queue_size", 256)
 }
 
 // WeakAuthToken reports whether no strong API credential is configured.

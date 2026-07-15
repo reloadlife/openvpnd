@@ -23,6 +23,8 @@ import (
 	"github.com/reloadlife/openvpnd/internal/reconcile"
 	"github.com/reloadlife/openvpnd/internal/snmp"
 	"github.com/reloadlife/openvpnd/internal/stats"
+	"github.com/reloadlife/openvpnd/internal/version"
+	"github.com/reloadlife/openvpnd/internal/webhook"
 )
 
 // App is the openvpnd process.
@@ -102,6 +104,19 @@ func (a *App) Run(ctx context.Context) error {
 	cache := stats.NewCache()
 	collector := metrics.New(cache, nil)
 
+	// Optional controller webhooks (also receives all store.AddEvent kinds).
+	wh := webhook.New(webhook.Config{
+		Enabled:   a.cfg.Webhooks.Enabled,
+		URL:       a.cfg.Webhooks.URL,
+		Secret:    a.cfg.Webhooks.Secret,
+		Events:    a.cfg.Webhooks.Events,
+		Timeout:   a.cfg.Webhooks.Timeout,
+		QueueSize: a.cfg.Webhooks.QueueSize,
+	}, "openvpnd", version.Version, a.log)
+	store.SetEventHook(func(level, kind, instance, clientCN, message, meta string) {
+		wh.EmitFromStore(level, kind, instance, clientCN, message, meta)
+	})
+
 	rec := reconcile.New(store, backend, cache, reconcile.Config{
 		ConfDir:              a.cfg.OpenVPN.ConfDir,
 		RuntimeDir:           a.cfg.OpenVPN.RuntimeDir,
@@ -117,6 +132,9 @@ func (a *App) Run(ctx context.Context) error {
 
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+
+	wh.Start(ctx)
+	defer wh.Close()
 
 	go rec.Loop(ctx, a.cfg.ReconcileInterval())
 

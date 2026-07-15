@@ -48,6 +48,9 @@ type Reconciler struct {
 	mu         sync.Mutex
 	prevSample map[string]sample // key instance/cn
 	lastErr    error
+	// lifecycle edge detection for controller webhooks
+	prevUp       map[string]bool            // instance name → was up
+	prevPeerConn map[string]map[string]bool // instance → cn → connected
 }
 
 type sample struct {
@@ -67,13 +70,15 @@ func New(store *db.Store, backend ovpnbackend.Backend, cache *stats.Cache, cfg C
 		log = slog.Default()
 	}
 	return &Reconciler{
-		store:      store,
-		backend:    backend,
-		cache:      cache,
-		cfg:        cfg,
-		log:        log,
-		bw:         bandwidth.NewEnforcer(cfg.BandwidthEnforcement, log),
-		prevSample: make(map[string]sample),
+		store:        store,
+		backend:      backend,
+		cache:        cache,
+		cfg:          cfg,
+		log:          log,
+		bw:           bandwidth.NewEnforcer(cfg.BandwidthEnforcement, log),
+		prevSample:   make(map[string]sample),
+		prevUp:       make(map[string]bool),
+		prevPeerConn: make(map[string]map[string]bool),
 	}
 }
 
@@ -333,6 +338,30 @@ func (r *Reconciler) applyInstance(ctx context.Context, inst db.Instance) error 
 				for _, lc := range st.Clients {
 					byCN[lc.CommonName] = lc
 				}
+				// peer connect/disconnect edges for controller webhooks
+				curConn := make(map[string]bool, len(byCN))
+				for cn := range byCN {
+					if cn == "" {
+						continue
+					}
+					curConn[cn] = true
+				}
+				prevConn := r.prevPeerConn[inst.Name]
+				if prevConn == nil {
+					prevConn = map[string]bool{}
+				}
+				for cn := range curConn {
+					if !prevConn[cn] {
+						_ = r.store.AddEvent(ctx, "info", "peer.connected", inst.Name, cn, "peer connected", "{}")
+					}
+				}
+				for cn := range prevConn {
+					if !curConn[cn] {
+						_ = r.store.AddEvent(ctx, "info", "peer.disconnected", inst.Name, cn, "peer disconnected", "{}")
+					}
+				}
+				r.prevPeerConn[inst.Name] = curConn
+
 				for i := range clients {
 					c := clients[i]
 					lc, connected := byCN[c.CommonName]
@@ -446,11 +475,12 @@ func (r *Reconciler) applyInstance(ctx context.Context, inst db.Instance) error 
 	}
 
 	_ = r.store.UpdateInstanceRuntime(ctx, inst.Name, pid, rendered.Hash, lastErr, rx, tx, rxBps, txBps, nClients)
+	instUp := up && inst.Enabled
 	if r.cache != nil {
 		r.cache.SetInstance(stats.InstanceStats{
 			Name:             inst.Name,
 			Role:             inst.Role,
-			Up:               up && inst.Enabled,
+			Up:               instUp,
 			PID:              pid,
 			Port:             inst.Port,
 			ConnectedClients: nClients,
@@ -462,6 +492,16 @@ func (r *Reconciler) applyInstance(ctx context.Context, inst db.Instance) error 
 			UpdatedAt:        time.Now().UTC(),
 		})
 	}
+
+	// Lifecycle edges → events (picked up by webhooks via store hook).
+	if was, seen := r.prevUp[inst.Name]; seen && was != instUp {
+		if instUp {
+			_ = r.store.AddEvent(ctx, "info", "instance.up", inst.Name, "", "instance is up", "{}")
+		} else {
+			_ = r.store.AddEvent(ctx, "warn", "instance.down", inst.Name, "", "instance is down", "{}")
+		}
+	}
+	r.prevUp[inst.Name] = instUp
 
 	// persist conf hash on instance row for next comparison via UpdateInstance is heavy; runtime is enough
 	_ = filepath.Separator

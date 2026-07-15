@@ -108,6 +108,33 @@ openvpn:
 
 Reconciler applies/removes rules after `EnsureInstance`. Cleared limits drop host rules. Over-quota **server peers** are suspended (`disable` in CCD) and killed via management if connected.
 
+When `bandwidth_enforcement: tc`, `/readyz` includes `bandwidth_tc=ok|missing` (needs `iproute2` `tc` on PATH).
+
+## Webhooks (controller push)
+
+Optional HTTP callbacks for a higher-layer multi-tenant controller. All `events` rows (API audit, reconcile, lifecycle) are eligible.
+
+```yaml
+webhooks:
+  enabled: true
+  url: "https://controller.example/hooks/openvpnd"
+  secret: "shared-hmac-secret"   # optional; X-Webhook-Signature: sha256=<hex>
+  events: ["*"]                  # or ["peer.*","instance.*","reconcile"]
+  timeout: 5s
+  queue_size: 256
+```
+
+| Header | Meaning |
+|--------|---------|
+| `Content-Type` | `application/json` |
+| `X-Agent` | `openvpnd` |
+| `X-Event-Kind` | e.g. `peer.connected` |
+| `X-Webhook-Signature` | `sha256=<hmac-sha256-hex of body>` when `secret` set |
+
+Payload fields: `agent`, `version`, `ts`, `level`, `kind`, `resource` (instance), `subject` (client CN), `message`, `meta`.
+
+Lifecycle kinds (edge-triggered): `instance.up`, `instance.down`, `peer.connected`, `peer.disconnected`. Delivery is best-effort (bounded queue); controllers should still poll.
+
 ## IP assignment (no DHCP)
 
 Server TUN mode uses OpenVPN pool from `server_network` (e.g. `10.8.0.0/24`). Client static IPs go to CCD via `ifconfig-push`. DNS/routes are `push` options, not a DHCP daemon.

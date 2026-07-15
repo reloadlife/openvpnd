@@ -60,12 +60,19 @@ openvpn:
   # SIGKILL after 5s) a verified openvpn PID from discover. Never signals
   # openvpnd/openvpnctl. Set false to restore notes-only take_over.
   adopt_takeover_enabled: true
-  # Per-client bandwidth_rx_bps / bandwidth_tx_bps enforcement:
-  #   off    — disabled (default); traffic_limit_bytes suspend still works
-  #   tc     — Linux tc HTB + ingress police (needs instance device name + iproute2)
-  #   shaper — global OpenVPN --shaper from max client limit (outgoing only)
-  #   log    — plan tc rules and log only (dry-run)
+  # Bandwidth (role-aware):
+  #   server peers — Client.bandwidth_* (need static_ip + instance device for tc)
+  #   client tunnels — Instance.bandwidth_* whole-device
+  #   off | tc | shaper | log  (production template defaults to tc when ready)
   bandwidth_enforcement: "off"
+
+# External controller push (optional). See docs/CONFIGURATION.md § Webhooks.
+webhooks:
+  enabled: false
+  # url: "https://controller.example/hooks/openvpnd"
+  # secret: "shared-hmac-secret"
+  # events: ["*"]
+  # timeout: 5s
 
 log:
   level: info

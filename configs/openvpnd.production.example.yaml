@@ -46,8 +46,22 @@ openvpn:
   allow_hooks: false
   use_mock_backend: false  # never true on a real VPN host
   adopt_on_start: false
-  # off | tc | shaper | log — prefer off or log until tc is validated on the host
-  bandwidth_enforcement: "off"
+  # off | tc | shaper | log
+  # tc: per-peer HTB (server clients need static_ip + device) + whole-tunnel for client role
+  # Requires iproute2 `tc` on PATH; /readyz reports bandwidth_tc=ok|missing
+  bandwidth_enforcement: "tc"
+
+# Push events to an external multi-tenant controller (optional).
+# HMAC header: X-Webhook-Signature: sha256=<hex>
+# Body: {agent,version,ts,level,kind,resource,subject,message,meta}
+# Kinds include: instance.up|down, peer.connected|disconnected, reconcile, api, pki, adopt, …
+webhooks:
+  enabled: false
+  # url: "https://controller.example/hooks/openvpnd"
+  # secret: "shared-hmac-secret"
+  # events: ["*"]          # or ["peer.*","instance.*","reconcile"]
+  # timeout: 5s
+  # queue_size: 256
 
 log:
   level: info
