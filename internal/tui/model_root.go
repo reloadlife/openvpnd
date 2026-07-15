@@ -2,8 +2,11 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/filepicker"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -26,6 +29,7 @@ const (
 	modeConfView     = 6
 	modeProfileLink  = 7
 	modeConfirm      = 8
+	modeFilePick     = 9
 )
 
 type confirmKind int
@@ -61,6 +65,11 @@ type rootModel struct {
 	confirmText string
 	confirmArg  string
 	confirmArg2 string
+
+	// file picker overlay (returns to formReturnMode)
+	filePick       filepicker.Model
+	filePickKey    string // form field key to fill
+	formReturnMode int
 
 	detailInst   *pkgapi.Instance
 	detailClient *pkgapi.ServerClient
@@ -109,6 +118,9 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		if m.mode == modeInstForm || m.mode == modeClientForm || m.mode == modeBinaryForm {
 			m.form.SetSize(msg.Width, m.formAreaHeight())
+		}
+		if m.mode == modeFilePick {
+			m.filePick.SetHeight(max(8, m.formAreaHeight()-4))
 		}
 		return m, nil
 
@@ -192,10 +204,23 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.mode == modeFilePick {
+			return m.handleFilePickKey(msg)
+		}
 		if m.mode == modeInstForm || m.mode == modeClientForm || m.mode == modeBinaryForm {
 			return m.handleFormKeyAll(msg)
 		}
 		return m.handleKey(msg)
+	}
+
+	// Non-key messages while file picking (dir reads, etc.)
+	if m.mode == modeFilePick {
+		var cmd tea.Cmd
+		m.filePick, cmd = m.filePick.Update(msg)
+		if did, path := m.filePick.DidSelectFile(msg); did {
+			return m.applyPickedFile(path)
+		}
+		return m, cmd
 	}
 	return m, nil
 }
@@ -320,6 +345,7 @@ func (m rootModel) handleFormKeyAll(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeList
 		return m, nil
 	case "enter":
+		// file fields: enter still saves the form (browse via space/ctrl+o)
 		switch m.mode {
 		case modeInstForm:
 			return m.submitInstForm()
@@ -328,10 +354,157 @@ func (m rootModel) handleFormKeyAll(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case modeBinaryForm:
 			return m.submitBinaryForm()
 		}
+	case "ctrl+o":
+		if m.form.Focused().Kind == fieldFile {
+			return m.openFilePickerForFocus()
+		}
+	case " ":
+		if m.form.Focused().Kind == fieldFile {
+			return m.openFilePickerForFocus()
+		}
 	}
 	var cmd tea.Cmd
 	m.form, cmd = m.form.Update(msg)
 	return m, cmd
+}
+
+func (m rootModel) openFilePickerForFocus() (tea.Model, tea.Cmd) {
+	fd := m.form.Focused()
+	if fd.Key == "" || fd.Kind != fieldFile {
+		return m, nil
+	}
+	fp := filepicker.New()
+	fp.FileAllowed = true
+	fp.DirAllowed = false
+	fp.ShowHidden = false
+	fp.ShowPermissions = false
+	fp.ShowSize = true
+	fp.AutoHeight = false
+	fp.SetHeight(max(8, m.formAreaHeight()-4))
+	if len(fd.AllowedTypes) > 0 {
+		fp.AllowedTypes = fd.AllowedTypes
+	}
+	// Start from existing value dir, else cwd / home
+	start := strings.TrimSpace(m.form.Get(fd.Key))
+	switch {
+	case start != "":
+		if st, err := os.Stat(start); err == nil && !st.IsDir() {
+			fp.CurrentDirectory = filepath.Dir(start)
+		} else if err == nil && st.IsDir() {
+			fp.CurrentDirectory = start
+		} else {
+			fp.CurrentDirectory = filepath.Dir(start)
+		}
+	default:
+		if wd, err := os.Getwd(); err == nil {
+			fp.CurrentDirectory = wd
+		} else if home, err := os.UserHomeDir(); err == nil {
+			fp.CurrentDirectory = home
+		} else {
+			fp.CurrentDirectory = "/"
+		}
+	}
+	if abs, err := filepath.Abs(fp.CurrentDirectory); err == nil {
+		fp.CurrentDirectory = abs
+	}
+	m.filePick = fp
+	m.filePickKey = fd.Key
+	m.formReturnMode = m.mode
+	m.mode = modeFilePick
+	m.form.err = ""
+	return m, m.filePick.Init()
+}
+
+func (m rootModel) handleFilePickKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Esc cancels only when at root of stack is hard; use ctrl+c handled globally elsewhere.
+	// Bubbletea filepicker uses esc as "back" directory — use ctrl+q / ctrl+g to cancel.
+	switch msg.String() {
+	case "ctrl+g", "ctrl+q":
+		m.mode = m.formReturnMode
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.filePick, cmd = m.filePick.Update(msg)
+	if did, path := m.filePick.DidSelectFile(msg); did {
+		return m.applyPickedFile(path)
+	}
+	return m, cmd
+}
+
+func (m rootModel) applyPickedFile(path string) (tea.Model, tea.Cmd) {
+	key := m.filePickKey
+	m.mode = m.formReturnMode
+	if path == "" {
+		return m, nil
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	m.form.SetValue(key, path)
+
+	// Auto-import client .ovpn when picking profile
+	if key == "profile" && m.formReturnMode == modeInstForm {
+		p, err := parseClientProfileFile(path, importDestDir(path))
+		if err != nil {
+			m.form.err = "profile import: " + err.Error()
+			m.form.note = "Selected " + path + " (manual remote/cert still required if parse failed)"
+			return m, nil
+		}
+		patch := map[string]string{"profile": path}
+		if p.Remotes != "" {
+			patch["remote"] = p.Remotes
+		}
+		if p.Proto != "" {
+			patch["proto"] = p.Proto
+		}
+		if p.DevType != "" {
+			patch["dev_type"] = p.DevType
+		}
+		if p.AuthMode != "" {
+			patch["auth_mode"] = p.AuthMode
+		}
+		if p.Cipher != "" {
+			patch["cipher"] = p.Cipher
+		}
+		if p.Auth != "" {
+			patch["auth"] = p.Auth
+		}
+		if p.DataCiphers != "" {
+			patch["data_ciphers"] = p.DataCiphers
+		}
+		if p.CAPath != "" {
+			patch["pki_ca"] = p.CAPath
+		}
+		if p.CertPath != "" {
+			patch["pki_cert"] = p.CertPath
+		}
+		if p.KeyPath != "" {
+			patch["pki_key"] = p.KeyPath
+		}
+		if p.TLSCrypt != "" {
+			patch["tls_crypt_path"] = p.TLSCrypt
+		}
+		if p.StaticKey != "" {
+			patch["static_key"] = p.StaticKey
+		}
+		if p.Extra != "" {
+			// merge with existing extra
+			prev := m.form.Get("extra")
+			if prev != "" && !strings.Contains(prev, p.Extra) {
+				patch["extra"] = strings.TrimSpace(prev+"\n"+p.Extra) + "\n"
+			} else if prev == "" {
+				patch["extra"] = p.Extra
+			}
+		}
+		// Prefer explicit-exit-notify for UDP clients
+		if m.form.Get("features") == "" {
+			patch["features"] = "explicit_exit_notify"
+		}
+		m.form.ApplyValues(patch)
+		m.form.err = ""
+		m.form.note = "Imported profile → remotes + cert material filled. Review and enter to create."
+	}
+	return m, nil
 }
 
 func (m rootModel) handleListKey(key string) (tea.Model, tea.Cmd) {
@@ -401,17 +574,18 @@ func (m rootModel) openCreateForm() (tea.Model, tea.Cmd) {
 		for _, b := range m.binaries {
 			bins = append(bins, b.Name)
 		}
-		m.form = newForm("Create instance (auto-fills empty fields)", instanceCreateFields(bins), map[string]string{
+		m.form = newForm("Create instance (←/→ Role switches fields)", instanceCreateFields(bins), map[string]string{
 			"role": "server", "proto": "udp", "topology": "subnet", "dev_type": "tun",
 			"auth_mode": "pki", "issue_cert": "y", "tls_crypt": "y", "create_ca": "y",
 			"push_dns": "1.1.1.1",
 		})
-		m.form.note = "Leave name/port/network empty for auto. issue_cert+create_ca → full mTLS server."
+		m.form.note = "Server: leave name/port/network empty for auto. issue_cert+create_ca → full mTLS."
 		m.form.SetSize(m.width, m.formAreaHeight())
 		m.mode = modeInstForm
 	case tabClients:
 		servers := m.serverNames()
-		m.form = newForm("Create client", clientCreateFields(servers), nil)
+		m.form = newForm("Create client (space/ctrl+o browse cert/key)", clientCreateFields(servers), nil)
+		m.form.note = "VPN user on a server instance. Cert/key optional if you issue later."
 		m.form.SetSize(m.width, m.formAreaHeight())
 		m.mode = modeClientForm
 	case tabBinaries:
@@ -578,24 +752,19 @@ func (m rootModel) handleClientDetailKey(key string) (tea.Model, tea.Cmd) {
 
 func (m rootModel) submitInstForm() (tea.Model, tea.Cmd) {
 	v := m.form.Values()
+	role := strings.ToLower(strings.TrimSpace(v["role"]))
+	if role == "" {
+		role = "server"
+	}
 	port, _ := parseIntField(v["port"])
-	issue := truthy(v["issue_cert"])
-	tlsCrypt := truthy(v["tls_crypt"])
 	req := pkgapi.InstanceCreateRequest{
-		Name: v["name"], Role: v["role"], BinaryName: v["binary"], Port: port, Proto: v["proto"],
+		Name: v["name"], Role: role, BinaryName: v["binary"], Port: port, Proto: v["proto"],
 		LocalBind: v["local_bind"], DevType: v["dev_type"], Device: v["device"],
-		ServerNetwork: v["network"], Topology: v["topology"], PublicEndpoint: v["public_endpoint"],
-		PushDNS: splitCSV(v["push_dns"]), PushRoutes: splitCSV(v["push_routes"]), PushDomain: v["push_domain"],
-		RedirectGateway: truthy(v["redirect_gw"]),
 		AuthMode: v["auth_mode"], DataCiphers: v["data_ciphers"], AuthDigest: v["auth"], Cipher: v["cipher"],
 		PKICaPath: v["pki_ca"], PKICertPath: v["pki_cert"], PKIKeyPath: v["pki_key"],
+		PKITLSCryptPath: v["tls_crypt_path"], StaticKeyPath: v["static_key"],
 		ExtraDirectives: v["extra"],
-		FeatureSets: splitCSV(v["features"]),
-		Remote: v["remote"],
-		CAName: v["ca_name"], ServerCN: v["server_cn"],
-		CreateCAIfEmpty: truthy(v["create_ca"]),
-		IssueServerCert:  &issue,
-		GenerateTLSCrypt: &tlsCrypt,
+		FeatureSets:     splitCSV(v["features"]),
 	}
 	if pl := strings.TrimSpace(v["plugin"]); pl != "" {
 		parts := strings.Fields(pl)
@@ -604,6 +773,41 @@ func (m rootModel) submitInstForm() (tea.Model, tea.Cmd) {
 			p.Args = parts[1:]
 		}
 		req.Plugins = []pkgapi.Plugin{p}
+	}
+
+	if role == "server" {
+		issue := truthy(v["issue_cert"])
+		tlsCrypt := truthy(v["tls_crypt"])
+		req.ServerNetwork = v["network"]
+		req.Topology = v["topology"]
+		req.PublicEndpoint = v["public_endpoint"]
+		req.PushDNS = splitCSV(v["push_dns"])
+		req.PushRoutes = splitCSV(v["push_routes"])
+		req.PushDomain = v["push_domain"]
+		req.RedirectGateway = truthy(v["redirect_gw"])
+		req.CAName = v["ca_name"]
+		req.ServerCN = v["server_cn"]
+		req.CreateCAIfEmpty = truthy(v["create_ca"])
+		req.IssueServerCert = &issue
+		req.GenerateTLSCrypt = &tlsCrypt
+	} else {
+		// client instance: outbound connection
+		req.Remote = v["remote"]
+		// Don't auto-issue server certs for clients
+		f := false
+		req.IssueServerCert = &f
+		req.GenerateTLSCrypt = &f
+		req.CreateCAIfEmpty = false
+		if req.FeatureSets == nil && v["features"] == "" {
+			// mild default for UDP clients
+			req.FeatureSets = []string{"explicit_exit_notify"}
+		}
+	}
+
+	// Client needs remotes — surface form error instead of opaque API fail
+	if role == "client" && strings.TrimSpace(v["remote"]) == "" {
+		m.form.err = "client requires Remote(s) or a Profile .ovpn with remotes"
+		return m, nil
 	}
 	return m.startMutate(doCreateInstance(m.cfg.Client, req))
 }
@@ -678,6 +882,16 @@ func (m rootModel) View() string {
 	case modeInstForm, modeClientForm, modeBinaryForm:
 		m.form.SetSize(w, mainH)
 		mid = m.form.View()
+	case modeFilePick:
+		var b strings.Builder
+		b.WriteString(titleStyle.Render("Select file → " + m.filePickKey))
+		b.WriteString("\n")
+		b.WriteString(dimStyle.Render(m.filePick.CurrentDirectory))
+		b.WriteString("\n\n")
+		b.WriteString(m.filePick.View())
+		b.WriteString("\n")
+		b.WriteString(helpStyle.Render("j/k move  ·  enter select  ·  h/backspace parent  ·  ctrl+g cancel"))
+		mid = panelStyle.Width(w).Height(mainH).MaxHeight(mainH).Render(b.String())
 	case modeInstDetail:
 		mid = fillHeight(m.viewInstDetail(w, mainH), w, mainH)
 	case modeClientDetail:
@@ -717,7 +931,9 @@ func (m rootModel) View() string {
 func (m rootModel) chromeHelp() string {
 	switch m.mode {
 	case modeInstForm, modeClientForm, modeBinaryForm:
-		return "tab/↑↓ fields  ·  ←/→ or space change  ·  enter save  ·  esc cancel"
+		return "tab/↑↓ fields  ·  ←/→ role & toggles  ·  space/ctrl+o browse file  ·  enter save  ·  esc cancel"
+	case modeFilePick:
+		return "j/k navigate  ·  enter select file  ·  h parent dir  ·  ctrl+g cancel"
 	case modeConfirm:
 		return "y confirm  ·  n/esc cancel"
 	case modeInstDetail:
