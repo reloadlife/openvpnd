@@ -385,13 +385,7 @@ func (f formModel) View() string {
 		b.WriteString("\n\n")
 	}
 	if f.note != "" {
-		b.WriteString(okStyle.Render("  " + f.note))
-		b.WriteString("\n\n")
-	}
-
-	// Tip box for focused field (always visible near top while scrolling fields)
-	if len(f.fields) > 0 && f.focus >= 0 && f.focus < len(f.fields) {
-		b.WriteString(f.renderTipBox(f.fields[f.focus]))
+		b.WriteString(dimStyle.Render(truncRunes(f.note, max(20, f.width-6))))
 		b.WriteString("\n")
 	}
 
@@ -443,7 +437,7 @@ func (f formModel) View() string {
 		case fieldFile:
 			raw := f.inputs[i].View()
 			if focused {
-				val = raw + dimStyle.Render("  [space/ctrl+o browse]")
+				val = raw + dimStyle.Render("  [browse]")
 			} else {
 				val = raw
 			}
@@ -454,11 +448,17 @@ func (f formModel) View() string {
 		b.WriteString("  ")
 		b.WriteString(val)
 		b.WriteString("\n")
+		// One short line under the focused field only — no big tip panel.
+		if focused {
+			if line := compactTip(field, max(24, f.width-8)); line != "" {
+				b.WriteString(dimStyle.Render("  " + line))
+				b.WriteString("\n")
+			}
+		}
 	}
-	b.WriteString("\n")
 	help := f.help
 	if help == "" {
-		help = "tab/↑↓ move  ·  ←/→ role & toggles  ·  space/ctrl+o file browse  ·  enter save  ·  esc cancel"
+		help = "tab/↑↓  ·  ←/→  ·  space browse  ·  enter save  ·  esc"
 	}
 	b.WriteString(helpStyle.Render(help))
 	inner := b.String()
@@ -474,66 +474,36 @@ func (f formModel) View() string {
 	return box.Render(inner)
 }
 
-func (f formModel) renderTipBox(field fieldDef) string {
-	tip := strings.TrimSpace(field.Tip)
-	if tip == "" {
-		tip = strings.TrimSpace(field.Hint)
+// compactTip is a single truncated line for the focused field (hint preferred).
+func compactTip(field fieldDef, maxW int) string {
+	s := strings.TrimSpace(field.Hint)
+	if s == "" {
+		s = strings.TrimSpace(field.Tip)
 	}
-	if tip == "" {
+	if s == "" {
 		return ""
 	}
-	head := "💡 " + field.Label
-	if field.Section != "" {
-		head += "  ·  " + field.Section
+	// Prefer first sentence of tip if using Tip as fallback
+	if field.Hint == "" {
+		if i := strings.IndexAny(s, ".!?"); i > 12 && i < 90 {
+			s = s[:i+1]
+		}
 	}
-	// soft-wrap tip to form width
-	wrapW := f.width - 10
-	if wrapW < 40 {
-		wrapW = 56
-	}
-	if wrapW > 100 {
-		wrapW = 100
-	}
-	body := wordWrap(tip, wrapW)
-	if field.Hint != "" && field.Tip != "" && field.Hint != field.Tip {
-		body += "\n" + dimStyle.Render("example: "+field.Hint)
-	}
-	if field.Kind == fieldFile {
-		body += "\n" + dimStyle.Render("tip: press space or ctrl+o to browse files")
-	}
-	if field.Kind == fieldSelect || field.Kind == fieldBool {
-		body += "\n" + dimStyle.Render("tip: use ←/→ or space to change")
-	}
-	inner := headerStyle.Render(head) + "\n" + valueStyle.Render(body)
-	return tipBoxStyle.Width(min(f.width-4, wrapW+6)).Render(inner) + "\n"
+	return truncRunes(s, maxW)
 }
 
-func wordWrap(s string, width int) string {
-	if width < 20 {
-		width = 20
+func truncRunes(s string, maxW int) string {
+	if maxW < 4 {
+		maxW = 4
 	}
-	words := strings.Fields(s)
-	if len(words) == 0 {
+	if lipgloss.Width(s) <= maxW {
 		return s
 	}
-	var lines []string
-	var cur string
-	for _, w := range words {
-		if cur == "" {
-			cur = w
-			continue
-		}
-		if len(cur)+1+len(w) > width {
-			lines = append(lines, cur)
-			cur = w
-			continue
-		}
-		cur += " " + w
+	// crude byte trim is ok for ASCII tips; keep simple
+	for lipgloss.Width(s) > maxW-1 && len(s) > 0 {
+		s = s[:len(s)-1]
 	}
-	if cur != "" {
-		lines = append(lines, cur)
-	}
-	return strings.Join(lines, "\n")
+	return s + "…"
 }
 
 func instanceCreateFields(binaries []string) []fieldDef {
