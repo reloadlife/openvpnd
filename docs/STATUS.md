@@ -58,14 +58,46 @@ OpenVPN has hundreds of options. First-class coverage is intentional and incompl
 | Self-update from releases | Not started |
 | Test matrix for tier A | Done |
 
-## Roadmap (priority order)
+## Shipped baseline
 
-1. Live process adopt + richer conf import (inline PEMs)
-2. TAP / server-bridge
-3. Bandwidth enforcement (tc/nft)
-4. Host-backend integration tests
-5. LDAP / auth-user-pass-verify plugins
-6. Full dual-stack IPv6 pool model
+| Item | Location |
+|------|----------|
+| Tag / release | [v0.1.0](https://github.com/reloadlife/openvpnd/releases/tag/v0.1.0) |
+| Commit | `bf4e225` |
+| Roadmap issues | [label:roadmap](https://github.com/reloadlife/openvpnd/issues?q=is%3Aissue+is%3Aopen+label%3Aroadmap) |
+
+## Roadmap (GitHub issues)
+
+Tracked with detailed plans for later implementation. Prefer working an issue over ad-hoc scope creep.
+
+### High priority
+
+| Issue | Topic |
+|-------|--------|
+| [#1](https://github.com/reloadlife/openvpnd/issues/1) | Adopt live OpenVPN processes |
+| [#2](https://github.com/reloadlife/openvpnd/issues/2) | Conf import materializes inline PEMs |
+| [#3](https://github.com/reloadlife/openvpnd/issues/3) | Richer management API surface |
+
+### Medium priority
+
+| Issue | Topic |
+|-------|--------|
+| [#4](https://github.com/reloadlife/openvpnd/issues/4) | Bandwidth / traffic limit enforcement |
+| [#5](https://github.com/reloadlife/openvpnd/issues/5) | Full dual-stack IPv6 |
+| [#6](https://github.com/reloadlife/openvpnd/issues/6) | TAP server-bridge |
+| [#7](https://github.com/reloadlife/openvpnd/issues/7) | auth-user-pass-verify / LDAP |
+| [#8](https://github.com/reloadlife/openvpnd/issues/8) | Richer CCD ACL |
+| [#11](https://github.com/reloadlife/openvpnd/issues/11) | Host-backend integration tests |
+
+### Lower priority
+
+| Issue | Topic |
+|-------|--------|
+| [#9](https://github.com/reloadlife/openvpnd/issues/9) | Typed tls-cipher / tls-groups |
+| [#10](https://github.com/reloadlife/openvpnd/issues/10) | Self-update from Releases |
+| [#12](https://github.com/reloadlife/openvpnd/issues/12) | First-class UDP stuffing preset |
+
+Feature matrix: [OPENVPN_FEATURES.md](OPENVPN_FEATURES.md). Testing: [TESTING.md](TESTING.md).
 
 ## Comparison to wireguardd
 

@@ -6,7 +6,7 @@
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%203.0-blue.svg)](LICENSE)
 
-> **Status:** early development (private). Foundation works with mock or host OpenVPN backends. Not 1:1 with every OpenVPN option — see [docs/STATUS.md](docs/STATUS.md).
+> **Status:** [v0.1.0](https://github.com/reloadlife/openvpnd/releases/tag/v0.1.0) shipped. Not 1:1 with every OpenVPN option — see [docs/STATUS.md](docs/STATUS.md) and open [roadmap issues](https://github.com/reloadlife/openvpnd/issues?q=is%3Aissue+is%3Aopen+label%3Aroadmap).
 
 ## Why
 

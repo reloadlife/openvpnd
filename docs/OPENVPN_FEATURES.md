@@ -155,24 +155,27 @@ Anything else in the OpenVPN manpage that is not listed under A/B, for example:
 
 ---
 
-## D — Planned (not implemented)
+## D — Planned (tracked as GitHub issues)
 
-Priority order for first-class promotion:
+Implementation plans live on the tracker (label `roadmap`):
+https://github.com/reloadlife/openvpnd/issues?q=is%3Aissue+is%3Aopen+label%3Aroadmap
 
-| # | Area | OpenVPN surface | Acceptance criteria |
-|---|------|-----------------|---------------------|
-| 1 | ~~CRL / revoke~~ | done | — |
-| 2 | ~~Conf import~~ | done (file content; not live adopt) | Live process adopt still open |
-| 3 | Full IPv6 pool UX | ifconfig-ipv6 / dual pool | Beyond `server-ipv6` string |
-| 4 | ~~max-clients / tls-version / mtu / buf~~ | done | — |
-| 5 | tls-ciphers / tls-groups | modern TLS suites | Typed optional |
-| 6 | auth-user-pass-verify / LDAP | server auth plugins | Plugin recipes + docs |
-| 7 | TAP / server-bridge | bridge mode | Explicit opt-in |
-| 8 | ~~iroute~~ | done | Multi-ACL still open |
-| 9 | Bandwidth enforcement | tc/nft from fields | Today fields only |
-| 10 | Full management API | kill, hold, state, logs | Beyond status sample |
-| 11 | Live adopt running openvpn | pid/socket discover | Integration |
-| 12 | UDP stuffing first-class | fork options | After real fork binary |
+| Area | Issue | Notes |
+|------|-------|--------|
+| Live adopt running openvpn | [#1](https://github.com/reloadlife/openvpnd/issues/1) | pid/socket discover |
+| Inline PEM on conf import | [#2](https://github.com/reloadlife/openvpnd/issues/2) | materialize under pki_dir |
+| Full management API | [#3](https://github.com/reloadlife/openvpnd/issues/3) | kill, hold, status, logs |
+| Bandwidth enforcement | [#4](https://github.com/reloadlife/openvpnd/issues/4) | tc/nft/shaper |
+| Full IPv6 pool UX | [#5](https://github.com/reloadlife/openvpnd/issues/5) | beyond `server-ipv6` string |
+| TAP / server-bridge | [#6](https://github.com/reloadlife/openvpnd/issues/6) | bridge mode |
+| auth-user-pass-verify / LDAP | [#7](https://github.com/reloadlife/openvpnd/issues/7) | server auth plugins |
+| CCD multi-ACL | [#8](https://github.com/reloadlife/openvpnd/issues/8) | per-client push overrides |
+| tls-ciphers / tls-groups | [#9](https://github.com/reloadlife/openvpnd/issues/9) | typed control-channel crypto |
+| Self-update | [#10](https://github.com/reloadlife/openvpnd/issues/10) | GitHub Releases |
+| Host integration tests | [#11](https://github.com/reloadlife/openvpnd/issues/11) | real openvpn binary |
+| UDP stuffing first-class | [#12](https://github.com/reloadlife/openvpnd/issues/12) | after known fork |
+
+Done earlier (not open issues): CRL/revoke/renew, file conf import, max-clients/tls-version-min/mtu/buffers, iroute, TUI PKI.
 
 ---
 
