@@ -1,0 +1,107 @@
+# Testing
+
+## Goals
+
+1. **1:1 tests for every first-class OpenVPN feature** we claim under tier A in [OPENVPN_FEATURES.md](OPENVPN_FEATURES.md) — each typed field that emits conf must have a confgen assertion.
+2. **Package suites** for control plane (API, DB, PKI, backend mock, features, profiles).
+3. **No silent regressions** on client one-shot create (cert + IP + profile link).
+4. **Document gaps** (tier D) instead of fake green coverage.
+
+We do **not** require 100% line coverage on TUI/CLI chrome; we require behavioral coverage of confgen, validation, API, and PKI.
+
+## Quick commands
+
+```bash
+make test          # race + count=1, all packages
+make test-unit     # fast packages (no race): netutil instance confgen features db
+make test-api      # API + PKI + profile integration-style tests
+make test-race     # full with -race
+make cover         # total coverage summary
+make cover-html    # coverage.html for browser
+make test-feature  # confgen + features + profile only (OpenVPN surface)
+```
+
+## Suites
+
+| Suite | Packages | What it guards |
+|-------|----------|----------------|
+| **unit** | netutil, instance, confgen, features, stats (when present) | Pure logic, conf emission |
+| **store** | db | Migrations, CRUD, tokens, features table |
+| **pki** | pki, api (PKI cases) | CA/issue/tls-crypt files |
+| **api** | api | REST contract, client create, profiles |
+| **backend** | ovpnbackend | Mock ensure/stop/list |
+| **obs** | metrics, snmp | Scrapes / MIB |
+| **tui-logic** | tui (parse/import) | .ovpn import parsing only |
+| **feature** | confgen + features | OpenVPN directive emission |
+
+### Recommended CI order
+
+```bash
+make test-unit
+make test-feature
+make test-api
+make test-race
+```
+
+## Coverage targets (policy)
+
+| Package | Target | Notes |
+|---------|--------|-------|
+| `internal/confgen` | ≥ 75% | Every tier-A conf path |
+| `internal/features` | ≥ 80% | Expand + merge |
+| `internal/instance` | ≥ 70% | Prepare/validate |
+| `internal/netutil` | ≥ 85% | Pool/CIDR |
+| `internal/pki` | ≥ 65% | Issue paths |
+| `internal/api` | ≥ 45% | Critical handlers (not every error branch) |
+| `internal/db` | ≥ 40% | CRUD + migrations smoke |
+| `internal/tui` | best-effort | Logic only (import); full Bubble Tea E2E later |
+| `cmd/*` | optional | Manual / smoke |
+
+Measure:
+
+```bash
+make cover
+go tool cover -func=coverage.out | sort -k3 -n
+```
+
+## 1:1 confgen rule
+
+For each **tier A** row in OPENVPN_FEATURES that emits a conf line:
+
+1. A table-driven test in `internal/confgen` sets the field.
+2. Asserts the expected directive substring (or absence).
+3. Name the subtest after the OpenVPN option: `t.Run("data-ciphers", …)`.
+
+Feature presets: one expand test per builtin ID (or a single table over all builtins).
+
+## Adding a new OpenVPN option
+
+1. Classify tier A / B / C / D in OPENVPN_FEATURES.md.
+2. If A: add field → confgen → validation → **test before merge**.
+3. If B: add preset or document plugin/binary recipe + expand test.
+4. If C: document example `extra_directives` only.
+5. If D: add row under Planned; do not emit half-supported conf.
+
+## Fixtures
+
+- Prefer in-memory SQLite (`:memory:`) and `ovpnbackend.NewMock()`.
+- Temp dirs for PKI PEM material (`t.TempDir()`).
+- No live OpenVPN process required for unit/api suites (host backend is integration-only).
+
+## Planned tests (not yet full)
+
+| Gap | Plan |
+|-----|------|
+| Reconciler unit | Ensure conf write + EnsureInstance with mock |
+| Host backend | Integration tag `//go:build integration` when openvpn installed |
+| TUI model keys | golden / scripted bubbletea later |
+| CLI cobra | smoke `go test` with args if extracted from main |
+| SNMP bulk walk | Expand agent_test |
+| DB features/presets CRUD | db_test table cases |
+| Config load | config package YAML round-trip |
+
+## Anti-patterns
+
+- Asserting full conf string equality (brittle) — prefer contains + critical order when needed.
+- Testing OpenVPN itself — we test **our generation and control plane**.
+- Claiming tier-A support without a confgen subtest.

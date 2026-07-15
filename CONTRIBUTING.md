@@ -7,14 +7,19 @@ Thanks for contributing to openvpnd.
 ```bash
 # Go 1.24+
 make deps
-make test
-make lint   # requires golangci-lint
+make test-unit      # fast pure logic
+make test-feature   # OpenVPN conf 1:1 matrix + presets
+make test-api       # REST + PKI + DB
+make test           # full race suite
+make cover          # coverage summary
+make lint           # requires golangci-lint
 make build
 ```
 
 - Format with `gofmt`
 - Prefer small, focused PRs
-- Add tests for bug fixes and new behavior when practical
+- **New tier-A OpenVPN options require a confgen subtest** (see [docs/OPENVPN_FEATURES.md](docs/OPENVPN_FEATURES.md) + [docs/TESTING.md](docs/TESTING.md))
+- Do not claim “supported” for options that only exist as untested `extra_directives`
 - Do not commit secrets, private keys, PEMs, or host-specific configs
 
 ## Project layout

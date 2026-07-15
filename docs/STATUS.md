@@ -24,13 +24,24 @@ openvpnd is under active development. This document tracks what works today vs p
 
 ## Not 1:1 with OpenVPN
 
-OpenVPN has hundreds of options. First-class coverage is intentional and incomplete. Use `extra_directives` for the long tail.
+OpenVPN has hundreds of options. First-class coverage is intentional and incomplete.
 
-### Major gaps
+**Canonical matrix:** [OPENVPN_FEATURES.md](OPENVPN_FEATURES.md) (tiers A–E).  
+**How we test it:** [TESTING.md](TESTING.md) + `make test-feature` (1:1 confgen matrix).
+
+| Tier | Meaning |
+|------|---------|
+| A | First-class typed field — must have confgen/API tests |
+| B | Extensions (`feature_sets` / plugins / multi-binary) |
+| C | `extra_directives` escape hatch |
+| D | Planned |
+| E | Out of scope |
+
+### Major gaps (summary)
 
 | Area | Status |
 |------|--------|
-| Managed PKI (CA + issue server/client + tls-crypt) | Done (CRL later) |
+| Managed PKI (CA + issue server/client + tls-crypt) | Done (CRL later — tier D) |
 | Conf import / adopt running processes | Planned |
 | TAP / `server-bridge` / VLAN | Not started |
 | IPv6 pools | Not started |
@@ -41,15 +52,17 @@ OpenVPN has hundreds of options. First-class coverage is intentional and incompl
 | TUI | Done (foundation screens) |
 | Self-update from releases | Not started |
 | QR codes for profile URLs | Done (TUI profile link) |
+| Test matrix for tier A | Done (`TestTierAFeatureMatrix`) |
 
 ## Roadmap (priority order)
 
 1. CRL / revoke + renew UX
 2. Conf parse/import + adopt
-3. Richer typed options (common 80%)
+3. Richer typed options (common 80% — promote C→A with tests)
 4. CCD/`iroute`/ACL model
 5. TUI PKI screens
-6. Advanced modes (bridge, IPv6, proxies) as needed
+6. Reconciler + host-backend integration tests
+7. Advanced modes (bridge, IPv6, proxies) as needed
 
 ## Comparison to wireguardd
 

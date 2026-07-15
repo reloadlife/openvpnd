@@ -7,7 +7,7 @@ LDFLAGS := -s -w \
 	-X $(MODULE)/internal/version.Commit=$(COMMIT) \
 	-X $(MODULE)/internal/version.Date=$(DATE)
 
-.PHONY: all build test lint cover run-daemon run-ctl cross clean deps
+.PHONY: all build test test-unit test-api test-feature test-race lint cover cover-html run-daemon run-ctl cross clean deps
 
 all: build
 
@@ -20,12 +20,34 @@ build:
 	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o bin/openvpnd ./cmd/openvpnd
 	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o bin/openvpnctl ./cmd/openvpnctl
 
+# Full suite (CI default)
 test:
 	go test -race -count=1 ./...
 
+# Fast pure-logic packages
+test-unit:
+	go test -count=1 ./internal/netutil/ ./internal/instance/ ./internal/confgen/ ./internal/features/ ./internal/stats/ ./internal/ovpnbackend/
+
+# HTTP + PKI + profile contracts
+test-api:
+	go test -count=1 ./internal/api/ ./internal/pki/ ./internal/db/
+
+# OpenVPN conf emission + feature presets (tier A matrix)
+test-feature:
+	go test -count=1 ./internal/confgen/ ./internal/features/ -run 'TestTierA|TestRender|TestEveryBuiltin|TestExpand|TestCCD'
+
+test-race:
+	go test -race -count=1 ./...
+
 cover:
-	go test -race -count=1 -coverprofile=coverage.out ./...
-	go tool cover -func=coverage.out | tail -n 1
+	go test -count=1 -coverprofile=coverage.out ./...
+	@go tool cover -func=coverage.out | tail -n 1
+	@echo "--- lowest packages ---"
+	@go tool cover -func=coverage.out | awk '$$3 ~ /%$$/ {print}' | sort -k3 -n | head -n 15
+
+cover-html: cover
+	go tool cover -html=coverage.out -o coverage.html
+	@echo "wrote coverage.html"
 
 lint:
 	golangci-lint run ./...

@@ -45,6 +45,8 @@ Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 | [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) | Prometheus + SNMP |
 | [docs/PKI.md](docs/PKI.md) | CA / mTLS certs |
 | [docs/EXTENSIONS.md](docs/EXTENSIONS.md) | Plugins, custom builds, feature sets |
+| [docs/OPENVPN_FEATURES.md](docs/OPENVPN_FEATURES.md) | OpenVPN option matrix (A–E) + test ownership |
+| [docs/TESTING.md](docs/TESTING.md) | Suites, coverage targets, `make test-*` |
 | [SECURITY.md](SECURITY.md) | Reporting + hardening |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Dev workflow |
 
