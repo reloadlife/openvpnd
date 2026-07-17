@@ -34,6 +34,19 @@ func ValidateIP(s string) error {
 	return nil
 }
 
+// IPInCIDR reports whether host IP is inside cidr (e.g. for ifconfig-push).
+func IPInCIDR(ipStr, cidr string) bool {
+	ip := net.ParseIP(strings.TrimSpace(ipStr))
+	if ip == nil {
+		return false
+	}
+	_, ipnet, err := net.ParseCIDR(strings.TrimSpace(cidr))
+	if err != nil || ipnet == nil {
+		return false
+	}
+	return ipnet.Contains(ip)
+}
+
 // NormalizeHostIP turns bare IP or host CIDR into a host address string.
 func NormalizeHostIP(s string) (string, error) {
 	s = strings.TrimSpace(s)

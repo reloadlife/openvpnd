@@ -118,6 +118,7 @@ func RenderClientProfile(inst db.Instance, client db.Client, mat ProfileMaterial
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "# openvpnd profile · instance=%s cn=%s\n", inst.Name, client.CommonName)
+	// Portable profile: OpenVPN Connect (iOS/Android), community 2.5+, MikroTik-friendly defaults.
 	fmt.Fprintf(&b, "client\n")
 	fmt.Fprintf(&b, "dev %s\n", dev)
 	fmt.Fprintf(&b, "proto %s\n", proto)
@@ -129,19 +130,43 @@ func RenderClientProfile(inst db.Instance, client db.Client, mat ProfileMaterial
 	fmt.Fprintf(&b, "remote-cert-tls server\n")
 	fmt.Fprintf(&b, "auth-nocache\n")
 	fmt.Fprintf(&b, "verb 3\n")
+	// Ignore options older peers (MikroTik, ancient Connect) do not understand.
+	fmt.Fprintf(&b, "ignore-unknown-option data-ciphers\n")
+	fmt.Fprintf(&b, "ignore-unknown-option data-ciphers-fallback\n")
 	// Friendly UDP disconnect (OpenVPN Connect / community clients)
 	if strings.HasPrefix(strings.ToLower(proto), "udp") {
 		fmt.Fprintf(&b, "explicit-exit-notify 1\n")
 	}
-	if inst.Cipher != "" {
-		fmt.Fprintf(&b, "cipher %s\n", inst.Cipher)
+	// Always emit cipher + data-ciphers for wide client coverage:
+	//  - OpenVPN ≤2.4 / some iOS builds want `cipher`
+	//  - 2.5+ prefer data-ciphers; fallback for NCP negotiation
+	cipher := strings.TrimSpace(inst.Cipher)
+	dataCiphers := strings.TrimSpace(inst.DataCiphers)
+	if dataCiphers == "" {
+		dataCiphers = "AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305"
 	}
-	if inst.DataCiphers != "" {
-		fmt.Fprintf(&b, "data-ciphers %s\n", inst.DataCiphers)
+	if cipher == "" {
+		// First GCM entry from data-ciphers, else AES-256-GCM
+		cipher = "AES-256-GCM"
+		for _, part := range strings.Split(dataCiphers, ":") {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				cipher = part
+				break
+			}
+		}
 	}
-	if inst.AuthDigest != "" {
-		fmt.Fprintf(&b, "auth %s\n", inst.AuthDigest)
+	fmt.Fprintf(&b, "cipher %s\n", cipher)
+	fmt.Fprintf(&b, "data-ciphers %s\n", dataCiphers)
+	fmt.Fprintf(&b, "data-ciphers-fallback AES-256-CBC\n")
+	auth := strings.TrimSpace(inst.AuthDigest)
+	if auth == "" {
+		auth = "SHA256"
 	}
+	fmt.Fprintf(&b, "auth %s\n", auth)
+	// Mobile clients: float allows rebind after sleep/network change.
+	fmt.Fprintf(&b, "float\n")
+	fmt.Fprintf(&b, "reneg-sec 0\n")
 
 	inline := opt.Inline
 	if inline || (mat.CA != "" && mat.Cert != "" && mat.Key != "") {

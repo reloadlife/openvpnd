@@ -87,6 +87,12 @@ func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 			return
 		}
+		// ifconfig-push must be inside server_network or OpenVPN refuses the client.
+		if sn := strings.TrimSpace(inst.ServerNetwork); sn != "" && !netutil.IPInCIDR(staticIP, sn) {
+			writeError(w, http.StatusBadRequest, "bad_request",
+				fmt.Sprintf("static_ip %s is outside server_network %s", staticIP, sn))
+			return
+		}
 	}
 
 	// Decide cert issuance: default ON when no manual paths and a CA is available.
