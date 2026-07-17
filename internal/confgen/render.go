@@ -110,7 +110,13 @@ func RenderInstanceOpts(inst db.Instance, paths Paths, clients []db.Client, opts
 	fmt.Fprintf(&b, "proto %s\n", proto)
 
 	if inst.LocalBind != "" {
+		// Pin listen+reply source to this address (required on multi-IP hosts when
+		// DNS points at a secondary address — otherwise replies leave on primary).
 		fmt.Fprintf(&b, "local %s\n", inst.LocalBind)
+	} else if inst.Role == "server" && strings.HasPrefix(strings.ToLower(proto), "udp") {
+		// No local_bind: multihome binds every local IPv4 so replies use the same
+		// address the client contacted (avoids .4 DNS → .5 primary reply trap).
+		fmt.Fprintf(&b, "multihome\n")
 	}
 
 	switch inst.Role {
