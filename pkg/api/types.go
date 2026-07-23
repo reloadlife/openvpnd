@@ -160,7 +160,12 @@ type InstanceCreateRequest struct {
 	PKITLSCryptPath string   `json:"pki_tls_crypt_path,omitempty"`
 	PKIDHPath       string   `json:"pki_dh_path,omitempty"`
 	StaticKeyPath   string   `json:"static_key_path,omitempty"`
-	ExtraDirectives string   `json:"extra_directives,omitempty"`
+	// ExtraClientCAPems adds trusted client-CA certs (PEM, cert only — never a key)
+	// appended after the instance CA in the server `ca` bundle. Each element is one or
+	// more concatenated CERTIFICATE blocks. Lets a fleet-wide CA authenticate clients
+	// on every node without replacing the per-node CA. Empty = only the instance CA.
+	ExtraClientCAPems []string `json:"extra_client_ca_pems,omitempty"`
+	ExtraDirectives   string   `json:"extra_directives,omitempty"`
 	// Extensions: custom OpenVPN builds / plugins (UDP stuffing, etc.)
 	Plugins        []Plugin `json:"plugins,omitempty"`
 	EnvVars        []EnvVar `json:"env_vars,omitempty"`
@@ -332,7 +337,10 @@ type InstanceUpdateRequest struct {
 	PKITLSCryptPath *string  `json:"pki_tls_crypt_path,omitempty"`
 	PKIDHPath       *string  `json:"pki_dh_path,omitempty"`
 	StaticKeyPath   *string  `json:"static_key_path,omitempty"`
-	ExtraDirectives *string  `json:"extra_directives,omitempty"`
+	// ExtraClientCAPems replaces the trusted client-CA bundle (cert-only PEMs). Send
+	// [] to clear. Omit (null) to leave unchanged. See InstanceCreateRequest.
+	ExtraClientCAPems []string `json:"extra_client_ca_pems,omitempty"`
+	ExtraDirectives   *string  `json:"extra_directives,omitempty"`
 	Plugins         []Plugin `json:"plugins,omitempty"`
 	EnvVars         []EnvVar `json:"env_vars,omitempty"`
 	FeatureSets     []string `json:"feature_sets,omitempty"`
@@ -440,6 +448,7 @@ type Instance struct {
 	PKIDHPath            string    `json:"pki_dh_path,omitempty"`
 	PKICRLPath           string    `json:"pki_crl_path,omitempty"`
 	StaticKeyPath        string    `json:"static_key_path,omitempty"`
+	ExtraClientCAPems    []string  `json:"extra_client_ca_pems,omitempty"`
 	ExtraDirectives      string    `json:"extra_directives,omitempty"`
 	Plugins              []Plugin  `json:"plugins,omitempty"`
 	EnvVars              []EnvVar  `json:"env_vars,omitempty"`

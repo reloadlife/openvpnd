@@ -562,7 +562,8 @@ func createInputFromAPI(req pkgapi.InstanceCreateRequest) (instance.CreateInput,
 		RedirectGateway: req.RedirectGateway,
 		PKICaPath:       req.PKICaPath, PKICertPath: req.PKICertPath, PKIKeyPath: req.PKIKeyPath,
 		PKITLSCrypt: req.PKITLSCryptPath, PKIDHPath: req.PKIDHPath, StaticKeyPath: req.StaticKeyPath,
-		ExtraDirectives: req.ExtraDirectives,
+		ExtraClientCAPems: req.ExtraClientCAPems,
+		ExtraDirectives:   req.ExtraDirectives,
 		Plugins:         toDBPlugins(req.Plugins), EnvVars: toDBEnv(req.EnvVars), FeatureSets: req.FeatureSets,
 		PreUp: req.PreUp, PostUp: req.PostUp, PreDown: req.PreDown, PostDown: req.PostDown,
 		PublicEndpoint: req.PublicEndpoint,
@@ -700,6 +701,14 @@ func (s *Server) handleUpdateInstance(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.StaticKeyPath != nil {
 		inst.StaticKeyPath = *req.StaticKeyPath
+	}
+	if req.ExtraClientCAPems != nil {
+		clean, err := instance.ValidateClientCAPEMs(req.ExtraClientCAPems)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "validation_error", err.Error())
+			return
+		}
+		inst.ExtraClientCAPems = clean
 	}
 	if req.ExtraDirectives != nil {
 		inst.ExtraDirectives = *req.ExtraDirectives
@@ -1100,8 +1109,9 @@ func (s *Server) toAPIInstance(i db.Instance) pkgapi.Instance {
 		RedirectGateway: i.RedirectGateway,
 		PKICaPath:       i.PKICaPath, PKICertPath: i.PKICertPath, PKIKeyPath: i.PKIKeyPath,
 		PKITLSCryptPath: i.PKITLSCryptPath, PKIDHPath: i.PKIDHPath, PKICRLPath: i.PKICRLPath,
-		StaticKeyPath:   i.StaticKeyPath,
-		ExtraDirectives: i.ExtraDirectives,
+		StaticKeyPath:     i.StaticKeyPath,
+		ExtraClientCAPems: i.ExtraClientCAPems,
+		ExtraDirectives:   i.ExtraDirectives,
 		Plugins:         toAPIPlugins(i.Plugins), EnvVars: toAPIEnv(i.EnvVars), FeatureSets: i.FeatureSets,
 		PreUp: i.PreUp, PostUp: i.PostUp, PreDown: i.PreDown, PostDown: i.PostDown,
 		MaxClients: i.MaxClients, TLSVersionMin: i.TLSVersionMin, TunMTU: i.TunMTU,

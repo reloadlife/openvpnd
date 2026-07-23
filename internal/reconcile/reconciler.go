@@ -219,10 +219,20 @@ func (r *Reconciler) applyInstance(ctx context.Context, inst db.Instance) error 
 		Name:       inst.Name,
 	}
 	customPresets, _ := r.store.ListFeaturePresets(ctx)
-	rendered, err := confgen.RenderInstanceOpts(inst, paths, clients, confgen.RenderOptions{
+	renderOpts := confgen.RenderOptions{
 		CustomPresets:        customPresets,
 		BandwidthEnforcement: r.cfg.BandwidthEnforcement,
-	})
+	}
+	// When extra trusted client CAs are set, load the instance's own CA cert so the
+	// `ca` directive can be rendered inline as [instance CA] + [extra CAs].
+	if len(inst.ExtraClientCAPems) > 0 && inst.PKICaPath != "" {
+		if caPEM, rerr := os.ReadFile(inst.PKICaPath); rerr == nil {
+			renderOpts.InstanceCAPEM = string(caPEM)
+		} else {
+			r.log.Warn("read instance CA for extra client-ca bundle", "instance", inst.Name, "err", rerr)
+		}
+	}
+	rendered, err := confgen.RenderInstanceOpts(inst, paths, clients, renderOpts)
 	if err != nil {
 		return fmt.Errorf("render conf: %w", err)
 	}

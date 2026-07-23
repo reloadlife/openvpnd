@@ -2,6 +2,8 @@
 package instance
 
 import (
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -48,8 +50,10 @@ type CreateInput struct {
 	PKITLSCrypt    string
 	PKIDHPath       string
 	StaticKeyPath   string
-	ExtraDirectives string
-	Plugins         []db.Plugin
+	// ExtraClientCAPems are additional trusted client-CA certs (PEM, cert only).
+	ExtraClientCAPems []string
+	ExtraDirectives   string
+	Plugins           []db.Plugin
 	EnvVars         []db.EnvVar
 	FeatureSets     []string
 	PreUp           string
@@ -374,6 +378,11 @@ func Prepare(in CreateInput, ctx Context) (Result, error) {
 		return Result{}, fmt.Errorf("issue_server_cert requires a CA — create one first or set create_ca_if_empty=true")
 	}
 
+	extraClientCAs, err := ValidateClientCAPEMs(in.ExtraClientCAPems)
+	if err != nil {
+		return Result{}, err
+	}
+
 	inst := db.Instance{
 		Name: name, Role: role, Enabled: enabled,
 		BinaryName: binary, BinaryPath: strings.TrimSpace(in.BinaryPath),
@@ -387,7 +396,8 @@ func Prepare(in CreateInput, ctx Context) (Result, error) {
 		PKICaPath: pClean(in.PKICaPath), PKICertPath: pClean(in.PKICertPath),
 		PKIKeyPath: pClean(in.PKIKeyPath), PKITLSCryptPath: pClean(in.PKITLSCrypt),
 		PKIDHPath: pClean(in.PKIDHPath), StaticKeyPath: pClean(in.StaticKeyPath),
-		ExtraDirectives: in.ExtraDirectives,
+		ExtraClientCAPems: extraClientCAs,
+		ExtraDirectives:   in.ExtraDirectives,
 		Plugins: in.Plugins, EnvVars: in.EnvVars, FeatureSets: cleanList(in.FeatureSets),
 		PreUp: in.PreUp, PostUp: in.PostUp, PreDown: in.PreDown, PostDown: in.PostDown,
 		PublicEndpoint: publicEP,
@@ -450,6 +460,43 @@ func ValidateName(name string) error {
 		return fmt.Errorf("name must match %s (letter first, alnum/_/-, max 32)", nameRe.String())
 	}
 	return nil
+}
+
+// ValidateClientCAPEMs checks each element is one or more parseable X.509
+// CERTIFICATE blocks and contains no private key (trust material only). It returns
+// the trimmed, non-empty PEMs for storage. Empty/nil input is valid (returns nil).
+func ValidateClientCAPEMs(pems []string) ([]string, error) {
+	var out []string
+	for idx, raw := range pems {
+		p := strings.TrimSpace(raw)
+		if p == "" {
+			return nil, fmt.Errorf("extra_client_ca_pems[%d]: empty PEM", idx)
+		}
+		rest := []byte(p)
+		n := 0
+		for {
+			blk, tail := pem.Decode(rest)
+			if blk == nil {
+				break
+			}
+			rest = tail
+			if strings.Contains(blk.Type, "PRIVATE KEY") {
+				return nil, fmt.Errorf("extra_client_ca_pems[%d]: private key not allowed (trusted CA cert only)", idx)
+			}
+			if blk.Type != "CERTIFICATE" {
+				return nil, fmt.Errorf("extra_client_ca_pems[%d]: expected CERTIFICATE block, got %q", idx, blk.Type)
+			}
+			if _, err := x509.ParseCertificate(blk.Bytes); err != nil {
+				return nil, fmt.Errorf("extra_client_ca_pems[%d]: %w", idx, err)
+			}
+			n++
+		}
+		if n == 0 {
+			return nil, fmt.Errorf("extra_client_ca_pems[%d]: no PEM CERTIFICATE block found", idx)
+		}
+		out = append(out, p)
+	}
+	return out, nil
 }
 
 // ValidateProto checks OpenVPN proto values we support.

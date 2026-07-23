@@ -18,6 +18,10 @@ type RenderOptions struct {
 	// BandwidthEnforcement: off|tc|shaper|log — when "shaper", emit global OpenVPN --shaper
 	// from the max of client bandwidth_* limits (bytes/sec). No per-client shaping in conf.
 	BandwidthEnforcement string
+	// InstanceCAPEM is the instance's own CA cert (PEM). Only used when the instance
+	// has ExtraClientCAPems: the `ca` directive is then rendered inline as this cert
+	// followed by the extra trusted client CAs. Empty falls back to `ca <path>`.
+	InstanceCAPEM string
 }
 
 // Paths holds runtime path helpers for an instance.
@@ -142,7 +146,15 @@ func RenderInstanceOpts(inst db.Instance, paths Paths, clients []db.Client, opts
 		}
 	} else {
 		if inst.PKICaPath != "" {
-			fmt.Fprintf(&b, "ca %s\n", inst.PKICaPath)
+			// When extra trusted client CAs are configured, inline the `ca` directive as
+			// [instance CA] + [extra CAs] so clients signed by any of them validate. A
+			// client cert authenticates if it chains to ANY CA in the bundle. Empty extras
+			// (or no loaded instance CA PEM) keep the exact `ca <path>` behavior.
+			if len(inst.ExtraClientCAPems) > 0 && strings.TrimSpace(opts.InstanceCAPEM) != "" {
+				writeInlinePEM(&b, "ca", clientCABundle(opts.InstanceCAPEM, inst.ExtraClientCAPems))
+			} else {
+				fmt.Fprintf(&b, "ca %s\n", inst.PKICaPath)
+			}
 		}
 		if inst.PKICertPath != "" {
 			fmt.Fprintf(&b, "cert %s\n", inst.PKICertPath)
@@ -290,6 +302,21 @@ func RenderInstanceOpts(inst db.Instance, paths Paths, clients []db.Client, opts
 
 	content := b.String()
 	return RenderResult{Content: content, Hash: Hash(content)}, nil
+}
+
+// clientCABundle concatenates the instance's own CA cert with any extra trusted
+// client CAs into a single PEM bundle for the server `ca` directive.
+func clientCABundle(instanceCAPEM string, extra []string) string {
+	parts := make([]string, 0, len(extra)+1)
+	if s := strings.TrimSpace(instanceCAPEM); s != "" {
+		parts = append(parts, s)
+	}
+	for _, e := range extra {
+		if s := strings.TrimSpace(e); s != "" {
+			parts = append(parts, s)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 func quoteArg(a string) string {

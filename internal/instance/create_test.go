@@ -1,13 +1,38 @@
 package instance_test
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/reloadlife/openvpnd/internal/db"
 	"github.com/reloadlife/openvpnd/internal/instance"
 )
+
+func genSelfSignedCA(t *testing.T) string {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(time.Now().UnixNano()),
+		Subject:               pkix.Name{CommonName: "test-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	require.NoError(t, err)
+	return strings.TrimSpace(string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})))
+}
 
 func TestPrepareServerAuto(t *testing.T) {
 	res, err := instance.Prepare(instance.CreateInput{
@@ -63,6 +88,36 @@ func TestPrepareOverlap(t *testing.T) {
 		DefaultBinary: "default",
 		HasCA:         true,
 	})
+	require.Error(t, err)
+}
+
+func TestValidateClientCAPEMs(t *testing.T) {
+	// A real (self-signed) CA cert passes; the trimmed PEM is returned.
+	certPEM := `-----BEGIN CERTIFICATE-----
+MIIBfzCCASWgAwIBAgIUE9Yg2fqExample0000000000000wCgYIKoZIzj0EAwIw
+-----END CERTIFICATE-----`
+	// Use a genuinely parseable cert instead of the placeholder above.
+	real := genSelfSignedCA(t)
+	out, err := instance.ValidateClientCAPEMs([]string{"  " + real + "  \n"})
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	require.Equal(t, real, out[0])
+
+	// Empty / nil is valid.
+	out, err = instance.ValidateClientCAPEMs(nil)
+	require.NoError(t, err)
+	require.Empty(t, out)
+
+	// A private key is rejected (trust material only).
+	_, err = instance.ValidateClientCAPEMs([]string{"-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----"})
+	require.Error(t, err)
+
+	// Non-PEM garbage is rejected.
+	_, err = instance.ValidateClientCAPEMs([]string{"not a pem"})
+	require.Error(t, err)
+
+	// A syntactically valid PEM CERTIFICATE block with non-cert bytes is rejected.
+	_, err = instance.ValidateClientCAPEMs([]string{certPEM})
 	require.Error(t, err)
 }
 

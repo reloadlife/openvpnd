@@ -78,7 +78,11 @@ type Instance struct {
 	PKIDHPath       string   `json:"pki_dh_path,omitempty"`
 	PKICRLPath      string   `json:"pki_crl_path,omitempty"`
 	StaticKeyPath   string   `json:"static_key_path,omitempty"`
-	ExtraDirectives string   `json:"extra_directives,omitempty"`
+	// ExtraClientCAPems are additional trusted client-CA certs (PEM, cert only —
+	// never a key) appended after the instance CA in the server `ca` bundle. Lets a
+	// fleet-wide CA authenticate clients on every node. Empty = only the instance CA.
+	ExtraClientCAPems []string `json:"extra_client_ca_pems,omitempty"`
+	ExtraDirectives   string   `json:"extra_directives,omitempty"`
 	// Extensions for custom OpenVPN builds / plugins (UDP stuffing, etc.)
 	Plugins     []Plugin `json:"plugins,omitempty"`
 	EnvVars     []EnvVar `json:"env_vars,omitempty"`

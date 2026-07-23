@@ -24,7 +24,7 @@ auth_user_pass_verify, script_security, username_as_common_name, auth_user_pass_
 bandwidth_rx_bps, bandwidth_tx_bps,
 conf_hash, pid, last_error,
 last_rx_bytes, last_tx_bytes, last_rx_bps, last_tx_bps, connected_clients,
-public_endpoint,
+public_endpoint, extra_client_ca_pems,
 created_at, updated_at`
 
 func scanInstance(scanner interface {
@@ -34,6 +34,7 @@ func scanInstance(scanner interface {
 	var enabled, redirect, authUserPass, bridgeMode, usernameAsCN int
 	var remotes, pushRoutes, pushDNS string
 	var plugins, envVars, featureSets string
+	var extraClientCAs string
 	var created, updated string
 	err := scanner.Scan(
 		&i.ID, &i.Name, &i.Role, &enabled, &i.BinaryName, &i.BinaryPath,
@@ -52,7 +53,7 @@ func scanInstance(scanner interface {
 		&i.BandwidthRxBps, &i.BandwidthTxBps,
 		&i.ConfHash, &i.PID, &i.LastError,
 		&i.LastRxBytes, &i.LastTxBytes, &i.LastRxBps, &i.LastTxBps, &i.ConnectedClients,
-		&i.PublicEndpoint,
+		&i.PublicEndpoint, &extraClientCAs,
 		&created, &updated,
 	)
 	if err != nil {
@@ -69,6 +70,7 @@ func scanInstance(scanner interface {
 	i.Plugins = decodePlugins(plugins)
 	i.EnvVars = decodeEnvVars(envVars)
 	i.FeatureSets = decodeJSONList(featureSets)
+	i.ExtraClientCAPems = decodeJSONList(extraClientCAs)
 	i.CreatedAt = parseTime(created)
 	i.UpdatedAt = parseTime(updated)
 	return i, nil
@@ -121,7 +123,7 @@ INSERT INTO instances (
   bandwidth_rx_bps, bandwidth_tx_bps,
   conf_hash, pid, last_error,
   last_rx_bytes, last_tx_bytes, last_rx_bps, last_tx_bps, connected_clients,
-  public_endpoint,
+  public_endpoint, extra_client_ca_pems,
   created_at, updated_at
 ) VALUES (
   ?,?,?,?,?, ?,?,?,?,?,?, ?,?,?,?,?, ?,?,?, ?,?,?,?,
@@ -131,7 +133,7 @@ INSERT INTO instances (
   ?,?,?,?,
   ?,?,?,?,?,
   ?,?,
-  '', 0, '', 0,0,0,0,0, ?, ?,?
+  '', 0, '', 0,0,0,0,0, ?, ?, ?,?
 )`,
 		i.Name, i.Role, boolToInt(i.Enabled), i.BinaryName, i.BinaryPath,
 		i.DevType, i.Device, i.Proto, i.LocalBind, i.Port, encodeRemotes(i.Remotes),
@@ -147,7 +149,7 @@ INSERT INTO instances (
 		i.TLSCipher, i.TLSCiphersuites, i.TLSGroups, i.TLSCertProfile,
 		i.AuthUserPassVerify, i.ScriptSecurity, boolToInt(i.UsernameAsCommonName), i.AuthUserPassFile, i.IfconfigIPv6,
 		i.BandwidthRxBps, i.BandwidthTxBps,
-		i.PublicEndpoint,
+		i.PublicEndpoint, encodeJSONList(i.ExtraClientCAPems),
 		now, now,
 	)
 	if err != nil {
@@ -232,7 +234,7 @@ UPDATE instances SET
   tls_cipher=?, tls_ciphersuites=?, tls_groups=?, tls_cert_profile=?,
   auth_user_pass_verify=?, script_security=?, username_as_common_name=?, auth_user_pass_file=?, ifconfig_ipv6=?,
   bandwidth_rx_bps=?, bandwidth_tx_bps=?,
-  conf_hash=?, public_endpoint=?, updated_at=?
+  conf_hash=?, public_endpoint=?, extra_client_ca_pems=?, updated_at=?
 WHERE name=?`,
 		i.Role, boolToInt(i.Enabled), i.BinaryName, i.BinaryPath,
 		i.DevType, i.Device, i.Proto, i.LocalBind, i.Port, encodeRemotes(i.Remotes),
@@ -248,7 +250,7 @@ WHERE name=?`,
 		i.TLSCipher, i.TLSCiphersuites, i.TLSGroups, i.TLSCertProfile,
 		i.AuthUserPassVerify, i.ScriptSecurity, boolToInt(i.UsernameAsCommonName), i.AuthUserPassFile, i.IfconfigIPv6,
 		i.BandwidthRxBps, i.BandwidthTxBps,
-		i.ConfHash, i.PublicEndpoint, now, i.Name,
+		i.ConfHash, i.PublicEndpoint, encodeJSONList(i.ExtraClientCAPems), now, i.Name,
 	)
 	if err != nil {
 		return Instance{}, err
