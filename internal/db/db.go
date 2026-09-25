@@ -15,10 +15,11 @@ import (
 
 // Store wraps the state SQLite DB plus a dedicated timeseries SQLite DB.
 type Store struct {
-	db     *sql.DB
-	ts     *sql.DB
-	memory bool
-	tsPath string
+	db        *sql.DB
+	ts        *sql.DB
+	memory    bool
+	statePath string
+	tsPath    string
 
 	mu        sync.Mutex
 	eventHook EventHook
@@ -88,10 +89,11 @@ func OpenWithOptions(opts OpenOptions) (*Store, error) {
 	_, _ = tsDB.Exec(`PRAGMA optimize`)
 
 	return &Store{
-		db:     stateDB,
-		ts:     tsDB,
-		memory: stateMem && tsMem,
-		tsPath: tsPath,
+		db:        stateDB,
+		ts:        tsDB,
+		memory:    stateMem && tsMem,
+		statePath: opts.Path,
+		tsPath:    tsPath,
 	}, nil
 }
 
