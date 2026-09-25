@@ -96,9 +96,3 @@ func (s *Store) Optimize() {
 		_, _ = s.ts.Exec(`PRAGMA optimize`)
 	}
 }
-
-// CheckpointWAL flushes the write-ahead log.
-func (s *Store) CheckpointWAL() error {
-	_, err := s.db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
-	return err
-}
