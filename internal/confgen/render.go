@@ -250,7 +250,13 @@ func RenderInstanceOpts(inst db.Instance, paths Paths, clients []db.Client, opts
 	fmt.Fprintf(&b, "status %s 1\n", paths.StatusFile())
 	fmt.Fprintf(&b, "management %s unix\n", paths.MgmtSock())
 	fmt.Fprintf(&b, "management-client-user root\n")
-	fmt.Fprintf(&b, "verb 3\n")
+	// verb 2, not 3: at 3 openvpn logs every management connect/command/
+	// disconnect, and openvpnd samples each instance over the management
+	// socket several times a second (reconcile + every GET /v1/instances), so
+	// the instance log was ~95% "MANAGEMENT: CMD 'status 2'" — ~46 MB/day per
+	// instance into tmpfs /run. Handshakes, peer connects and errors are all
+	// still logged at 2. extra_directives can raise it per instance.
+	fmt.Fprintf(&b, "verb 2\n")
 
 	if extra != "" {
 		fmt.Fprintf(&b, "\n# extensions (feature_sets + extra_directives)\n%s\n", extra)
