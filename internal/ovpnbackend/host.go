@@ -26,6 +26,17 @@ type HostBackend struct {
 	opts    HostOptions
 	mu      sync.Mutex
 	managed map[string]*procState // name -> state
+
+	// Reconcile probes once per instance per tick; the answer only changes when
+	// the binary file does, so don't fork it every time.
+	probeMu sync.Mutex
+	probes  map[string]binaryProbe
+}
+
+type binaryProbe struct {
+	modTime time.Time
+	size    int64
+	version string
 }
 
 type procState struct {
@@ -57,6 +68,15 @@ func (b *HostBackend) ProbeBinary(ctx context.Context, path string) (string, err
 	if path == "" {
 		return "", fmt.Errorf("empty binary path")
 	}
+	st, statErr := os.Stat(path)
+	if statErr == nil {
+		b.probeMu.Lock()
+		p, ok := b.probes[path]
+		b.probeMu.Unlock()
+		if ok && p.size == st.Size() && p.modTime.Equal(st.ModTime()) {
+			return p.version, nil
+		}
+	}
 	cmd := exec.CommandContext(ctx, path, "--version")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -65,7 +85,16 @@ func (b *HostBackend) ProbeBinary(ctx context.Context, path string) (string, err
 			return "", fmt.Errorf("probe %s: %w", path, err)
 		}
 	}
-	return firstVersionLine(string(out)), nil
+	version := firstVersionLine(string(out))
+	if statErr == nil {
+		b.probeMu.Lock()
+		if b.probes == nil {
+			b.probes = make(map[string]binaryProbe)
+		}
+		b.probes[path] = binaryProbe{modTime: st.ModTime(), size: st.Size(), version: version}
+		b.probeMu.Unlock()
+	}
+	return version, nil
 }
 
 func (b *HostBackend) ListLive(ctx context.Context) ([]LiveInstance, error) {
